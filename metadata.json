@@ -1,0 +1,6 @@
+{
+  "name": "그린그린",
+  "description": "AI 기반 반려식물 관리 및 분석, 그리고 일정 관리 어플리케이션",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
