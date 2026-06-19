@@ -125,28 +125,14 @@ fun HomeScreen(
             }
 
             // 2. 오늘 물 줄 시간 박스 (가연그린 포인트 2)
+            // 기존 Row를 걷어내고 단독 Text만 남기기
             item {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    Text(
-                        text = "오늘 물 줄 시간 💧",
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.Bold,
-                        color = OnGreenBackground
-                    )
-                    Text(
-                        text = "전체보기",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = GreenPrimary,
-                        fontWeight = FontWeight.SemiBold,
-                        modifier = Modifier
-                            .clickable { onNavigateToMyPlants() }
-                            .testTag("view_all_plants_button")
-                    )
-                }
+                Text(
+                    text = "오늘 물 줄 시간 💧",
+                    style = MaterialTheme.typography.titleMedium,
+                    fontWeight = FontWeight.Bold,
+                    color = OnGreenBackground
+                )
             }
 
             item {
@@ -156,21 +142,6 @@ fun HomeScreen(
                     onToggleCheck = { viewModel.toggleWateredToday(it) },
                     onCompleteWatering = { viewModel.waterPlant(it) }
                 )
-            }
-
-            // 3. AI 관리 팁 리스트
-            item {
-                Text(
-                    text = "AI 관리 팁 💡",
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Bold,
-                    color = OnGreenBackground,
-                    modifier = Modifier.padding(top = 4.dp)
-                )
-            }
-
-            item {
-                AiTipsSection()
             }
         }
     }
@@ -416,54 +387,6 @@ fun WateringSection(
                             )
                         }
                     }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-fun AiTipsSection() {
-    val tips = remember {
-        listOf(
-            "실내가 지나치게 건조할 수 있어요. 몬스테라 같은 잎이 넓은 식물 주변에 가볍게 수분 분무를 촉촉하게 선사해 주세요. ✨",
-            "물이 화분 받침대에 가득 고여 있으면 뿌리가 숨쉴 수 없어 썩을 수 있으니 물을 준 후 꼭 비워내시는 현명함을 강추합니다. ☝️",
-            "가을 및 초겨울의 차가운 발코니 밤바람은 냉해의 원인! 밤에는 실내 거실이나 가습 존으로 모셔오는 것이 완벽해요. 🏡",
-            "햇빛이 부족할 땐 인공 식물 전용 LED 조명을 활용하는 것도 식물들의 면역력과 생명력을 대폭 충전하는 우수한 팁입니다! 💡"
-        )
-    }
-
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .testTag("ai_tips_container"),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)),
-        shape = RoundedCornerShape(16.dp)
-    ) {
-        Column(
-            modifier = Modifier.padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp)
-        ) {
-            tips.forEach { tip ->
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.Top,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Filled.Lightbulb,
-                        contentDescription = "Tip Icon",
-                        tint = GoldAccent,
-                        modifier = Modifier
-                            .size(18.dp)
-                            .padding(top = 2.dp)
-                    )
-                    Text(
-                        text = tip,
-                        style = MaterialTheme.typography.bodyMedium.copy(lineHeight = 20.sp),
-                        color = OnGreenBackground,
-                        fontWeight = FontWeight.Medium
-                    )
                 }
             }
         }
