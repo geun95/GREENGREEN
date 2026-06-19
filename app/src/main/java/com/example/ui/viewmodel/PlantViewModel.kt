@@ -1,28 +1,33 @@
 package com.example.ui.viewmodel
 
+import android.Manifest
 import android.app.Application
 import android.content.Context
+import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.net.Uri
-import android.util.Base64
 import android.util.Log
+import androidx.core.content.ContextCompat
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.example.BuildConfig
 import com.example.api.*
+import com.example.api.NongsaroApi
 import com.example.data.AppDatabase
 import com.example.data.Plant
 import com.example.data.PlantRepository
-import com.squareup.moshi.Moshi
-import com.squareup.moshi.kotlin.reflect.KotlinJsonAdapterFactory
+import com.example.ml.PlantClassifier
+import com.google.android.gms.location.LocationServices
+import com.google.android.gms.location.Priority
+import com.google.android.gms.tasks.CancellationTokenSource
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.*
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
-import java.io.ByteArrayOutputStream
-import java.io.InputStream
-import java.text.SimpleDateFormat
 import java.util.*
+import kotlin.coroutines.resume
 
 sealed interface WeatherUiState {
     object Loading : WeatherUiState
@@ -64,6 +69,16 @@ class PlantViewModel(application: Application) : AndroidViewModel(application) {
     private val _wateredTodayIds = MutableStateFlow<Set<Int>>(emptySet())
     val wateredTodayIds: StateFlow<Set<Int>> = _wateredTodayIds.asStateFlow()
 
+    // 챗봇 상태
+    private val _chatMessages = MutableStateFlow<List<ChatMessage>>(emptyList())
+    val chatMessages: StateFlow<List<ChatMessage>> = _chatMessages.asStateFlow()
+
+    private val _isChatLoading = MutableStateFlow(false)
+    val isChatLoading: StateFlow<Boolean> = _isChatLoading.asStateFlow()
+
+    private var chatPlant: Plant? = null
+    private val chatHistoryDto = mutableListOf<ChatMessageDto>()
+
     init {
         val database = AppDatabase.getDatabase(application)
         repository = PlantRepository(database.plantDao())
@@ -78,18 +93,23 @@ class PlantViewModel(application: Application) : AndroidViewModel(application) {
         fetchWeather()
     }
 
-    // 날씨 데이터 가져오기
+    // 위치 기반 날씨 데이터 가져오기
     fun fetchWeather() {
         viewModelScope.launch {
             _weatherState.value = WeatherUiState.Loading
             try {
-                // 서울 좌표 기준으로 가져옴
-                val response = RetrofitClient.weatherService.getCurrentWeather()
+                val (lat, lon) = getCurrentLocation() ?: Pair(37.5665, 126.9780)
+                Log.d("PlantViewModel", "Weather location: lat=$lat, lon=$lon")
+
+                val response = RetrofitClient.weatherService.getCurrentWeather(
+                    latitude = lat,
+                    longitude = lon
+                )
                 val current = response.current_weather
                 if (current != null) {
                     val code = current.weathercode
                     val desc = getWeatherDescription(code)
-                    val isBad = code >= 50 // 비, 눈, 뇌우 등 햇빛 노출 적은지 여부
+                    val isBad = code >= 50
                     _weatherState.value = WeatherUiState.Success(
                         temperature = current.temperature,
                         description = desc,
@@ -101,6 +121,44 @@ class PlantViewModel(application: Application) : AndroidViewModel(application) {
             } catch (e: Exception) {
                 Log.e("PlantViewModel", "Weather fetch failed: ${e.message}", e)
                 _weatherState.value = WeatherUiState.Success(22.5, "맑음 ☀️", false)
+            }
+        }
+    }
+
+    @Suppress("MissingPermission")
+    private suspend fun getCurrentLocation(): Pair<Double, Double>? {
+        val context = getApplication<Application>()
+        val hasPermission = ContextCompat.checkSelfPermission(
+            context, Manifest.permission.ACCESS_FINE_LOCATION
+        ) == PackageManager.PERMISSION_GRANTED || ContextCompat.checkSelfPermission(
+            context, Manifest.permission.ACCESS_COARSE_LOCATION
+        ) == PackageManager.PERMISSION_GRANTED
+
+        if (!hasPermission) {
+            Log.d("PlantViewModel", "Location permission not granted, using Seoul default")
+            return null
+        }
+
+        return withContext(Dispatchers.IO) {
+            try {
+                val client = LocationServices.getFusedLocationProviderClient(context)
+                suspendCancellableCoroutine { cont ->
+                    client.getCurrentLocation(
+                        Priority.PRIORITY_BALANCED_POWER_ACCURACY,
+                        CancellationTokenSource().token
+                    ).addOnSuccessListener { location ->
+                        if (location != null) {
+                            cont.resume(Pair(location.latitude, location.longitude))
+                        } else {
+                            cont.resume(null)
+                        }
+                    }.addOnFailureListener {
+                        cont.resume(null)
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e("PlantViewModel", "Location fetch failed", e)
+                null
             }
         }
     }
@@ -135,30 +193,19 @@ class PlantViewModel(application: Application) : AndroidViewModel(application) {
         _wateredTodayIds.value = currentSet
     }
 
-    // 완전히 물주기 마침 (다음 물줄 일자 갱신)
+    // 물주기 완료 (lastWateredDate만 업데이트, 주기는 변경하지 않음)
     fun waterPlant(plant: Plant) {
         viewModelScope.launch {
             val now = System.currentTimeMillis()
-            val nextDate = now + (plant.wateringCycleDays * 24 * 60 * 60 * 1000L)
-            val updated = plant.copy(
-                lastWateredDate = now,
-                nextWateringDate = nextDate,
-                isWateredTodayPassed = false
-            )
+            val updated = plant.copy(lastWateredDate = now)
             repository.updatePlant(updated)
-            
-            // 임시 체크 목록에서도 제거
-            val currentSet = _wateredTodayIds.value.toMutableSet()
-            if (currentSet.contains(plant.id)) {
-                currentSet.remove(plant.id)
-                _wateredTodayIds.value = currentSet
-            }
         }
     }
 
-    // 새로운 식물 추가
+    // 새로운 식물 추가 (종류가 변경됐으면 농사로 API로 재검색)
     fun addPlant(
         name: String,
+        originalSpecies: String,
         nickname: String,
         wateringCycleDays: Int,
         sunlight: String,
@@ -167,17 +214,44 @@ class PlantViewModel(application: Application) : AndroidViewModel(application) {
         imageUri: String?
     ) {
         viewModelScope.launch {
+            val speciesChanged = name != originalSpecies
+
+            var finalWateringCycle = wateringCycleDays
+            var finalSunlight = sunlight
+            var finalTemperature = temperature
+            var finalBriefing = aiBriefing
+
+            if (speciesChanged) {
+                Log.d("PlantViewModel", "Species changed: $originalSpecies -> $name, re-searching API")
+                val apiCare = withContext(Dispatchers.IO) {
+                    try {
+                        NongsaroApi.searchPlantCare(name)
+                    } catch (e: Exception) {
+                        Log.e("PlantViewModel", "NongsaroApi re-search error", e)
+                        null
+                    }
+                }
+                if (apiCare != null) {
+                    finalWateringCycle = parseWateringCycleDays(apiCare.waterCycleSpring)
+                    finalSunlight = parseLightDemand(apiCare.lightDemand)
+                    finalTemperature = apiCare.growthTemperature.ifEmpty { temperature }
+                    finalBriefing = buildBriefing(apiCare)
+                    Log.d("PlantViewModel", "API re-search success for: $name")
+                }
+            }
+
             val now = System.currentTimeMillis()
-            val nextDate = now + (wateringCycleDays * 24 * 60 * 60 * 1000L)
+            val todayMidnight = getStartOfToday()
+            val nextDate = todayMidnight
             val newPlant = Plant(
                 name = name,
                 nickname = nickname,
-                wateringCycleDays = wateringCycleDays,
-                sunlightPreference = sunlight,
-                temperaturePreference = temperature,
-                lastWateredDate = now,
+                wateringCycleDays = finalWateringCycle,
+                sunlightPreference = finalSunlight,
+                temperaturePreference = finalTemperature,
+                lastWateredDate = 0L,
                 nextWateringDate = nextDate,
-                aiBriefing = aiBriefing,
+                aiBriefing = finalBriefing,
                 imageUri = imageUri
             )
             repository.insertPlant(newPlant)
@@ -190,168 +264,237 @@ class PlantViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    // AI 분석 진행
+    // TFLite 모델을 사용한 식물 분석
     fun analyzePlantImage(context: Context, uri: Uri?, presetId: String? = null) {
         _analysisState.value = AnalysisUiState.Analyzing
-        
+        Log.d("PlantViewModel", "analyzePlantImage called: uri=$uri, presetId=$presetId")
+
         viewModelScope.launch {
             try {
-                val base64Image = if (uri != null) {
-                    readImageAsBase64(context, uri)
-                } else if (presetId != null) {
-                    getPresetImageBase64(context, presetId)
-                } else {
-                    null
+                val bitmap = withContext(Dispatchers.IO) {
+                    when {
+                        uri != null -> loadBitmapFromUri(context, uri)
+                        presetId != null -> createPresetBitmap()
+                        else -> null
+                    }
                 }
+                Log.d("PlantViewModel", "Bitmap loaded: ${bitmap != null}, size=${bitmap?.width}x${bitmap?.height}")
 
-                val apiKey = com.example.BuildConfig.GEMINI_API_KEY
-                val isSampleKey = apiKey.isEmpty() || apiKey == "MY_GEMINI_API_KEY"
-
-                if (isSampleKey || base64Image == null) {
-                    // API 키가 없거나 이미지가 없으면 자연스럽고 완성도 높은 고품질 데모 모드로 작동합니다.
-                    withContext(Dispatchers.IO) {
-                        kotlinx.coroutines.delay(2000) // 분석 시뮬레이션
-                    }
-                    val speciesName = when (presetId) {
-                        "monstera" -> "몬스테라"
-                        "sunflower" -> "해바라기"
-                        "ivy" -> "아이비"
-                        else -> "산세베리아"
-                    }
-                    val fallback = getDemoResults(speciesName)
-                    _analysisState.value = AnalysisUiState.Success(fallback)
+                if (bitmap == null) {
+                    _analysisState.value = AnalysisUiState.Error("이미지를 불러올 수 없습니다.")
                     return@launch
                 }
 
-                // AI 가이드라인 요청을 위한 프롬프트 작성
-                val promptText = """
-                    반려식물 사진을 분석하여 다음 JSON 스키마를 엄격히 지켜 한국어로 결과를 제공하고 줄바꿈 등의 이스케이프 문자 처리를 깔끔히 적용하세요.
-                    
-                    {
-                      "species": "식물 품종명 (예: '해바라기' 또는 '몬스테라' 또는 '아이비')",
-                      "nickname_suggestion": "이 식물에 어울리는 한국어 귀여운 별명 추천 (예: '바라기짱')",
-                      "watering_cycle_days": 물주기 간격 일자 (정수 값만 입력 요망, 예: 3)",
-                      "sunlight": "빛 선호 습성 (예: '양지 (직사광선)' 또는 '반음지' 또는 '음지')",
-                      "temperature": "적정 생육 온도 범위 (예: '18~25도' 또는 '15~20도')",
-                      "ai_care_briefing": "AI 영양 브리핑 조언 내용. 식물이 건강히 잘 자랄 수 있도록 물주기, 햇빛, 통풍에 대해 아주 구체적이고 꼼꼼하게 작성된 3개의 가이드를 번호를 달아서 작성해 주세요. (줄바꿈 기호 '\n' 을 활용하여 3개의 가이드를 구분하세요. 번호는 '1.', '2.', '3.' 으로 시작해야 합니다)"
-                    }
-                """.trimIndent()
-
-                val request = GenerateContentRequest(
-                    contents = listOf(
-                        Content(
-                            parts = listOf(
-                                Part(text = promptText),
-                                Part(inlineData = InlineData(mimeType = "image/jpeg", data = base64Image))
-                            )
-                        )
-                    ),
-                    generationConfig = GenerationConfig(
-                        responseMimeType = "application/json"
-                    )
-                )
-
-                val response = RetrofitClient.geminiService.generateContent(apiKey, request)
-                val rawJson = response.candidates?.firstOrNull()?.content?.parts?.firstOrNull()?.text
-                
-                if (rawJson != null) {
-                    val parsed = parseJsonResult(rawJson)
-                    _analysisState.value = AnalysisUiState.Success(parsed)
-                } else {
-                    throw IllegalStateException("API가 빈 응답을 반환했습니다.")
+                Log.d("PlantViewModel", "Creating PlantClassifier...")
+                val classifier = PlantClassifier(context)
+                Log.d("PlantViewModel", "Classifier created, running classify...")
+                val results = withContext(Dispatchers.Default) {
+                    classifier.classify(bitmap)
                 }
+                classifier.close()
+                Log.d("PlantViewModel", "Classification results: $results")
+
+                val topResult = results.firstOrNull()
+                val label = topResult?.label ?: "unknown"
+                val confidence = topResult?.confidence ?: 0f
+                val speciesKorean = labelToKorean(label)
+                val fallbackCare = getCareInfo(label)
+
+                val confidenceText = if (confidence < 0.3f) {
+                    " (신뢰도 ${(confidence * 100).toInt()}% — 목록에 없는 식물일 수 있습니다)"
+                } else {
+                    ""
+                }
+
+                // 농사로 API에서 실제 식물 데이터 조회
+                val searchName = labelToNongsaroName(label)
+                val apiCare = withContext(Dispatchers.IO) {
+                    try {
+                        NongsaroApi.searchPlantCare(searchName)
+                    } catch (e: Exception) {
+                        Log.e("PlantViewModel", "NongsaroApi error", e)
+                        null
+                    }
+                }
+                Log.d("PlantViewModel", "NongsaroApi result: $apiCare")
+
+                val result = if (apiCare != null) {
+                    PlantAnalysisResult(
+                        species = speciesKorean + confidenceText,
+                        nickname_suggestion = fallbackCare.nickname,
+                        watering_cycle_days = parseWateringCycleDays(apiCare.waterCycleSpring),
+                        sunlight = parseLightDemand(apiCare.lightDemand),
+                        temperature = apiCare.growthTemperature.ifEmpty { fallbackCare.temperature },
+                        ai_care_briefing = buildBriefing(apiCare)
+                    )
+                } else {
+                    PlantAnalysisResult(
+                        species = speciesKorean + confidenceText,
+                        nickname_suggestion = fallbackCare.nickname,
+                        watering_cycle_days = fallbackCare.wateringCycleDays,
+                        sunlight = fallbackCare.sunlight,
+                        temperature = fallbackCare.temperature,
+                        ai_care_briefing = fallbackCare.briefing
+                    )
+                }
+                _analysisState.value = AnalysisUiState.Success(result)
 
             } catch (e: Exception) {
-                Log.e("PlantViewModel", "Gemini API error", e)
-                // 오류 상황에서도 아름답게 작동하도록 데모로 대체
-                val defaultSpecies = when (presetId) {
-                    "monstera" -> "몬스테라"
-                    "sunflower" -> "해바라기"
-                    "ivy" -> "아이비"
-                    else -> "식물"
-                }
-                _analysisState.value = AnalysisUiState.Success(getDemoResults(defaultSpecies))
+                Log.e("PlantViewModel", "TFLite classification error", e)
+                _analysisState.value = AnalysisUiState.Error("식물 분석에 실패했습니다: ${e.message}")
             }
+        }
+    }
+
+    private fun loadBitmapFromUri(context: Context, uri: Uri): Bitmap? {
+        return try {
+            val inputStream = context.contentResolver.openInputStream(uri)
+            val original = BitmapFactory.decodeStream(inputStream)
+            inputStream?.close()
+            resizeBitmap(original, 224)
+        } catch (e: Exception) {
+            Log.e("PlantViewModel", "Image load failed: ${e.message}", e)
+            null
+        }
+    }
+
+    private fun createPresetBitmap(): Bitmap {
+        val bitmap = Bitmap.createBitmap(224, 224, Bitmap.Config.ARGB_8888)
+        bitmap.eraseColor(android.graphics.Color.GREEN)
+        return bitmap
+    }
+
+    private fun parseWateringCycleDays(waterCycleText: String): Int {
+        return when {
+            waterCycleText.contains("항상") || waterCycleText.contains("촉촉") -> 3
+            waterCycleText.contains("표면이 말랐을때") -> 7
+            waterCycleText.contains("화분 흙 대부분 말랐을때") -> 14
+            else -> 7
+        }
+    }
+
+    private fun parseLightDemand(lightText: String): String {
+        return when {
+            lightText.contains("높은 광도") && lightText.contains("중간 광도") -> "반양지 (밝은 간접광)"
+            lightText.contains("높은 광도") -> "양지 (직사광선)"
+            lightText.contains("중간 광도") -> "반양지 (간접광)"
+            lightText.contains("낮은 광도") -> "반음지"
+            else -> lightText.ifEmpty { "반양지" }
+        }
+    }
+
+    private fun buildBriefing(care: PlantCareData): String {
+        val lines = mutableListOf<String>()
+
+        val springWater = care.waterCycleSpring
+        val winterWater = care.waterCycleWinter
+        if (springWater.isNotEmpty()) {
+            lines.add("1. 봄~가을: $springWater" +
+                if (winterWater.isNotEmpty() && winterWater != springWater) ", 겨울: $winterWater" else "")
+        }
+
+        if (care.lightDemand.isNotEmpty()) {
+            lines.add("2. 광도: ${care.lightDemand}")
+        }
+
+        val tempInfo = buildString {
+            if (care.growthTemperature.isNotEmpty()) append("생육 적온 ${care.growthTemperature}")
+            if (care.winterMinTemperature.isNotEmpty()) {
+                if (isNotEmpty()) append(", ")
+                append("겨울 최저 ${care.winterMinTemperature}")
+            }
+        }
+        if (tempInfo.isNotEmpty()) {
+            lines.add("3. $tempInfo")
+        }
+
+        if (care.humidity.isNotEmpty()) {
+            lines.add("${lines.size + 1}. 습도: ${care.humidity}")
+        }
+
+        return lines.joinToString("\n").ifEmpty { "관리 정보를 불러오지 못했습니다." }
+    }
+
+    private fun labelToKorean(label: String): String {
+        return when (label.lowercase()) {
+            "monstera" -> "몬스테라"
+            "snake_plant" -> "산세베리아"
+            "pothos" -> "스킨답서스"
+            "zz_plant" -> "금전수"
+            "rubber_plant" -> "인도고무나무"
+            else -> label
+        }
+    }
+
+    private fun labelToNongsaroName(label: String): String {
+        return when (label.lowercase()) {
+            "monstera" -> "몬스테라"
+            "snake_plant" -> "산세베리아"
+            "pothos" -> "스킨답서스"
+            "zz_plant" -> "금전수"
+            "rubber_plant" -> "데코라고무나무"
+            else -> labelToKorean(label)
+        }
+    }
+
+    private data class CareInfo(
+        val nickname: String,
+        val wateringCycleDays: Int,
+        val sunlight: String,
+        val temperature: String,
+        val briefing: String
+    )
+
+    private fun getCareInfo(label: String): CareInfo {
+        return when (label.lowercase()) {
+            "monstera" -> CareInfo(
+                nickname = "몬이",
+                wateringCycleDays = 7,
+                sunlight = "반양지 (간접광)",
+                temperature = "18~25도",
+                briefing = "1. 흙 표면이 2~3cm 마를 때 물을 충분히 주세요. 과습에 주의하세요.\n2. 직사광선을 피하고 밝은 간접광이 드는 곳에 두세요.\n3. 넓은 잎에 먼지가 쌓이지 않도록 젖은 천으로 닦아주세요."
+            )
+            "snake_plant" -> CareInfo(
+                nickname = "산이",
+                wateringCycleDays = 14,
+                sunlight = "반양지~반음지",
+                temperature = "15~25도",
+                briefing = "1. 건조에 강하므로 흙이 완전히 마른 후 2주 간격으로 물을 주세요.\n2. 밝은 간접광부터 반음지까지 잘 적응하지만, 너무 어두운 곳은 피하세요.\n3. 겨울철에는 물주기를 더 줄이고 통풍이 잘 되는 곳에 두세요."
+            )
+            "pothos" -> CareInfo(
+                nickname = "답이",
+                wateringCycleDays = 7,
+                sunlight = "반음지 (간접광)",
+                temperature = "18~24도",
+                briefing = "1. 겉흙이 마르면 물을 주되, 화분 밑으로 물이 빠지도록 충분히 주세요.\n2. 직사광선을 피한 밝은 간접광이 좋으며, 형광등 아래에서도 잘 자랍니다.\n3. 덩굴이 길어지면 적당히 가지치기하면 더욱 풍성하게 자랍니다."
+            )
+            "zz_plant" -> CareInfo(
+                nickname = "금이",
+                wateringCycleDays = 14,
+                sunlight = "반음지",
+                temperature = "16~24도",
+                briefing = "1. 뿌리에 수분을 저장하므로 2주에 한 번 정도 물을 주세요. 과습은 금물입니다.\n2. 반음지에서 잘 자라며 빛이 적은 실내에서도 잘 견딥니다.\n3. 잎이 윤기 있게 유지되도록 가끔 잎 표면을 닦아주세요."
+            )
+            "rubber_plant" -> CareInfo(
+                nickname = "고무",
+                wateringCycleDays = 10,
+                sunlight = "반양지 (밝은 간접광)",
+                temperature = "18~28도",
+                briefing = "1. 겉흙이 마르면 물을 주고, 겨울에는 간격을 늘려주세요.\n2. 밝은 간접광을 좋아하며 직사광선에 오래 두면 잎이 탈 수 있습니다.\n3. 큰 잎에 먼지가 쌓이기 쉬우니 주기적으로 닦아 광합성을 도와주세요."
+            )
+            else -> CareInfo(
+                nickname = "초록이",
+                wateringCycleDays = 7,
+                sunlight = "반양지",
+                temperature = "18~25도",
+                briefing = "1. 겉흙이 마르면 물을 충분히 주세요.\n2. 밝은 간접광이 드는 곳에 두세요.\n3. 통풍이 잘 되는 환경을 유지해주세요."
+            )
         }
     }
 
     // 분석 상태 초기화
     fun resetAnalysisState() {
         _analysisState.value = AnalysisUiState.Idle
-    }
-
-    // JSON 파서
-    private fun parseJsonResult(jsonStr: String): PlantAnalysisResult {
-        return try {
-            val moshi = Moshi.Builder().addLast(KotlinJsonAdapterFactory()).build()
-            val adapter = moshi.adapter(PlantAnalysisResult::class.java)
-            // JSON 응답에서 마크다운 백틱 문자 제거 (경우에 따라 ```json ``` 이 들어올 수 있으므로 정제)
-            val cleanStr = jsonStr.trim()
-                .removePrefix("```json")
-                .removePrefix("```")
-                .removeSuffix("```")
-                .trim()
-            adapter.fromJson(cleanStr) ?: throw IllegalArgumentException("JSON 파싱 null 리턴")
-        } catch (e: Exception) {
-            Log.e("PlantViewModel", "Moshi parsing failed, utilizing backup regex extraction: ${e.message}", e)
-            
-            // 정규식을 활용한 유연한 예외 추출
-            val species = extractField(jsonStr, "species", "몬스테라")
-            val nickname = extractField(jsonStr, "nickname_suggestion", "우리집 초록이")
-            val cycle = extractIntField(jsonStr, "watering_cycle_days", 7)
-            val sunlight = extractField(jsonStr, "sunlight", "반양지")
-            val temp = extractField(jsonStr, "temperature", "18~25도")
-            
-            var briefing = extractField(jsonStr, "ai_care_briefing", "")
-            if (briefing.isEmpty()) {
-                briefing = """
-                    1. 오늘 물을 주셨으므로, 당분간 화분 밑으로 보급층이 촉촉하게 유지될 수 있게 통풍이 잘 통하는 곳에 놔두세요.
-                    2. 해당 식물은 반양지 빛을 가장 선호하므로, 직접적인 뙤약볕보다는 투명 커튼 뒤 간접광이 최적입니다.
-                    3. 겨울철 실내 온도 변화에 취약하므로 항상 실내를 18~25도로 듬직하게 유지해 주세요.
-                """.trimIndent()
-            }
-            
-            PlantAnalysisResult(
-                species = species,
-                nickname_suggestion = nickname,
-                watering_cycle_days = cycle,
-                sunlight = sunlight,
-                temperature = temp,
-                ai_care_briefing = briefing
-            )
-        }
-    }
-
-    private fun extractField(json: String, name: String, default: String): String {
-        val pattern = "\"$name\"\\s*:\\s*\"([^\"]*)\"".toRegex()
-        return pattern.find(json)?.groupValues?.getOrNull(1) ?: default
-    }
-
-    private fun extractIntField(json: String, name: String, default: Int): Int {
-        val pattern = "\"$name\"\\s*:\\s*(\\d+)".toRegex()
-        return pattern.find(json)?.groupValues?.getOrNull(1)?.toIntOrNull() ?: default
-    }
-
-    // 이미지 파일을 읽고 Base64로 인코딩
-    private suspend fun readImageAsBase64(context: Context, uri: Uri): String = withContext(Dispatchers.IO) {
-        var inputStream: InputStream? = null
-        try {
-            inputStream = context.contentResolver.openInputStream(uri)
-            val original = BitmapFactory.decodeStream(inputStream)
-            
-            // 긴 축 800px 크기로 가볍게 리사이징하여 데이터 전송 효율 증대
-            val resized = resizeBitmap(original, 800)
-            
-            val outputStream = ByteArrayOutputStream()
-            resized.compress(Bitmap.CompressFormat.JPEG, 85, outputStream)
-            val bytes = outputStream.toByteArray()
-            Base64.encodeToString(bytes, Base64.NO_WRAP)
-        } catch (e: Exception) {
-            Log.e("PlantViewModel", "Image conversion failed: ${e.message}", e)
-            ""
-        } finally {
-            inputStream?.close()
-        }
     }
 
     private fun resizeBitmap(bitmap: Bitmap, maxDimension: Int): Bitmap {
@@ -372,67 +515,66 @@ class PlantViewModel(application: Application) : AndroidViewModel(application) {
         return Bitmap.createScaledBitmap(bitmap, newWidth, newHeight, true)
     }
 
-    // 더미 이미지를 Base64 대체제용으로 반환
-    private fun getPresetImageBase64(context: Context, presetId: String): String {
-        // 프리셋마다 작은 로컬 더미 픽셀 생성해서 Base64 리턴
-        val bitmap = Bitmap.createBitmap(128, 128, Bitmap.Config.ARGB_8888)
-        bitmap.eraseColor(android.graphics.Color.GREEN)
-        val stream = ByteArrayOutputStream()
-        bitmap.compress(Bitmap.CompressFormat.JPEG, 40, stream)
-        return Base64.encodeToString(stream.toByteArray(), Base64.NO_WRAP)
+    // 챗봇 초기화
+    fun initChat(plant: Plant) {
+        if (chatPlant?.id == plant.id) return
+        chatPlant = plant
+        chatHistoryDto.clear()
+
+        chatHistoryDto.add(ChatMessageDto(
+            role = "system",
+            content = """
+                당신은 반려식물 전문 상담사입니다. 사용자의 식물에 대한 질문에 친절하고 구체적으로 답변하세요.
+                현재 상담 중인 식물 정보:
+                - 종류: ${plant.name}
+                - 별명: ${plant.nickname}
+                - 물주기: ${plant.wateringCycleDays}일 간격
+                - 햇빛: ${plant.sunlightPreference}
+                - 온도: ${plant.temperaturePreference}
+                - 관리 팁: ${plant.aiBriefing}
+                답변은 한국어로, 간결하면서도 실용적으로 해주세요. 3~5문장 정도가 적당합니다.
+            """.trimIndent()
+        ))
+
+        _chatMessages.value = listOf(
+            ChatMessage(
+                text = "안녕하세요! ${plant.nickname}(${plant.name})에 대해 궁금한 점을 물어보세요.\n\n예: \"잎이 노래졌어요\", \"벌레가 생겼어요\", \"분갈이 시기가 궁금해요\"",
+                isUser = false
+            )
+        )
     }
 
-    // 데모용 고수준 결과 제공
-    private fun getDemoResults(species: String): PlantAnalysisResult {
-        return when (species) {
-            "해바라기" -> PlantAnalysisResult(
-                species = "해바라기",
-                nickname_suggestion = "바라기짱",
-                watering_cycle_days = 3,
-                sunlight = "양지 (직사광선)",
-                temperature = "18~25도",
-                ai_care_briefing = """
-                    1. 오늘 물을 주셨으니, 당분간은 겉흙이 보송보송하게 마르는 정도를 지켜보며 3일에 한번씩 넉넉히 수분을 주세요.
-                    2. 바라기짱이 햇빛을 듬뿍 받아 광합성할 수 있도록 하루 최소 5시간 이상 해가 드는 발코니나 정원에 배치하세요.
-                    3. 줄기가 곧고 힘차게 도약할 수 있도록 수시로 창문을 열어 환기를 시켜주시고 겉받침 고인 물은 꼭 비워주세요.
-                """.trimIndent()
-            )
-            "몬스테라" -> PlantAnalysisResult(
-                species = "몬스테라",
-                nickname_suggestion = "몬이몬이",
-                watering_cycle_days = 7,
-                sunlight = "반양지 (창문 뒤)",
-                temperature = "18~25도",
-                ai_care_briefing = """
-                    1. 몬스테라는 과습에 취약합니다. 흙 깊숙이 2~3cm 정도가 바싹 마른 손가락 깊이 느낌일 때 7일 주기로 화분 밑으로 스며나오게 듬뿍 주세요.
-                    2. 직접적인 한낮 직사광선을 쬐면 하트 잎사귀가 노랗게 타버릴 수 있으니, 커튼을 투과한 따스한 간접 반양지에 보금자리를 마련해주어야 합니다.
-                    3. 실내가 약간 건조할 수 있으므로, 몬스테라의 넓직한 잎 표면 주변으로 이틀에 한 번 가볍게 분무기로 안개를 뿜어 주면 잎 끝이 갈라지지 않고 싱그럽게 보존됩니다.
-                """.trimIndent()
-            )
-            "아이비" -> PlantAnalysisResult(
-                species = "잉글리시 아이비",
-                nickname_suggestion = "덩굴이",
-                watering_cycle_days = 5,
-                sunlight = "반음지 (간접광)",
-                temperature = "15~20도",
-                ai_care_briefing = """
-                    1. 흙 표면이 마르면 가볍게 5일 주기로 물 가습을 시켜주시고 실내가 건조해지지 않도록 통풍 경로를 꼭 만들어주세요.
-                    2. 너무 강한 해가 아니어도 밝은 그늘이나 간접광 선반 위에서 늘어지듯 이쁘게 잘 자라는 천혜의 능력을 가지고 있습니다.
-                    3. 조금 서늘한 대기(15~20도)를 좋아하므로, 여름에는 열기가 받히지 않는 시원하고 통풍이 솔솔 들치는 북동쪽 벽이나 창가가 제격입니다.
-                """.trimIndent()
-            )
-            else -> PlantAnalysisResult(
-                species = species,
-                nickname_suggestion = "초록동무",
-                watering_cycle_days = 6,
-                sunlight = "반양지 (간접광)",
-                temperature = "18~24도",
-                ai_care_briefing = """
-                    1. 오늘 정성스레 물을 가득 수여하셨습니다. 흙이 과도하게 질퍽하면 호흡 곤란이 오니 수시로 겉흙 상태를 어루만지며 6일에 한 번씩 수양해주세요.
-                    2. 자연의 산소를 좋아하므로 창가 가까이 자리 잡아 가벼운 바람을 부드럽게 들이치는 편이 성장에 아주 우수합니다.
-                    3. 잎의 미세먼지를 부드러운 천으로 닦아주시면 광합성 효율이 크게 활성화되어 더욱 선명하고 반짝이는 건강함을 뽐내게 됩니다.
-                """.trimIndent()
-            )
+    fun sendChatMessage(userText: String) {
+        val plant = chatPlant ?: return
+        _chatMessages.value = _chatMessages.value + ChatMessage(text = userText, isUser = true)
+        _isChatLoading.value = true
+
+        viewModelScope.launch {
+            try {
+                val apiKey = BuildConfig.OPENROUTER_API_KEY
+                if (apiKey.isBlank()) {
+                    throw IllegalStateException("OpenRouter API key is missing")
+                }
+
+                chatHistoryDto.add(ChatMessageDto(role = "user", content = userText))
+
+                val request = ChatRequest(messages = chatHistoryDto.toList())
+                val response = RetrofitClient.chatService.chat("Bearer $apiKey", request)
+
+                val reply = response.choices?.firstOrNull()?.message?.content
+                    ?: "죄송합니다, 답변을 생성하지 못했습니다."
+
+                chatHistoryDto.add(ChatMessageDto(role = "assistant", content = reply))
+                _chatMessages.value = _chatMessages.value + ChatMessage(text = reply, isUser = false)
+            } catch (e: Exception) {
+                Log.e("PlantViewModel", "Chat error", e)
+                _chatMessages.value = _chatMessages.value + ChatMessage(
+                    text = "네트워크 오류가 발생했습니다. 다시 시도해 주세요.",
+                    isUser = false
+                )
+            } finally {
+                _isChatLoading.value = false
+            }
         }
     }
 
@@ -446,3 +588,8 @@ class PlantViewModel(application: Application) : AndroidViewModel(application) {
         return cal.timeInMillis
     }
 }
+
+data class ChatMessage(
+    val text: String,
+    val isUser: Boolean
+)

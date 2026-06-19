@@ -1,0 +1,5 @@
+monstera
+pothos
+rubber_plant
+snake_plant
+zz_plant

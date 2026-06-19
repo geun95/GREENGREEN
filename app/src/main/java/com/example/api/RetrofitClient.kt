@@ -29,6 +29,15 @@ object RetrofitClient {
             .create(GeminiApiService::class.java)
     }
 
+    val chatService: ChatApiService by lazy {
+        Retrofit.Builder()
+            .baseUrl("https://openrouter.ai/")
+            .client(okHttpClient)
+            .addConverterFactory(MoshiConverterFactory.create(moshi))
+            .build()
+            .create(ChatApiService::class.java)
+    }
+
     val weatherService: WeatherApiService by lazy {
         Retrofit.Builder()
             .baseUrl("https://api.open-meteo.com/")

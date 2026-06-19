@@ -41,6 +41,10 @@ android {
     jvmTarget = "17"
   }
 
+  androidResources {
+    noCompress += "tflite"
+  }
+
   buildFeatures {
     compose = true
     buildConfig = true
@@ -88,8 +92,9 @@ dependencies {
   implementation(libs.logging.interceptor)
   implementation(libs.moshi.kotlin)
   implementation(libs.okhttp)
-  // implementation(libs.play.services.location)
+  implementation(libs.play.services.location)
   implementation(libs.retrofit)
+  implementation(libs.tensorflow.lite)
   testImplementation(libs.androidx.compose.ui.test.junit4)
   testImplementation(libs.androidx.core)
   testImplementation(libs.androidx.junit)
