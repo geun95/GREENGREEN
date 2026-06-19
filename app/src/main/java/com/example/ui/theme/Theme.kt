@@ -39,7 +39,7 @@ private val LightColorScheme = lightColorScheme(
 
 @Composable
 fun MyApplicationTheme(
-    darkTheme: Boolean = isSystemInDarkTheme(),
+    darkTheme: Boolean = false,
     // We default dynamicColor to false to preserve our custom plant brand colors exactly as designed in the PDF screenshot.
     dynamicColor: Boolean = false,
     content: @Composable () -> Unit,

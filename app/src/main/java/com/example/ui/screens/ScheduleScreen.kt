@@ -15,7 +15,7 @@ import androidx.compose.material.icons.filled.CalendarMonth
 import androidx.compose.material.icons.filled.CalendarToday
 import androidx.compose.material.icons.filled.ChevronLeft
 import androidx.compose.material.icons.filled.ChevronRight
-import androidx.compose.material.icons.filled.Eco
+import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.WaterDrop
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -63,15 +63,46 @@ fun ScheduleScreen(
     val startOfDay = selectedCalendarDate
     val endOfDay = startOfDay + (24 * 60 * 60 * 1000L)
 
-    // 해당 범위에 물줄 날짜가 해당하는 식물 필터링
+    // 해당 날짜에 물주기가 예정된 식물 필터링 (주기 반복 계산)
     val scheduledPlants = remember(plants, selectedCalendarDate) {
-        plants.filter { it.nextWateringDate in startOfDay until endOfDay }
+        plants.filter { plant ->
+            val cycleDays = plant.wateringCycleDays
+            if (cycleDays <= 0) return@filter false
+            val cycleMs = cycleDays * 24 * 60 * 60 * 1000L
+
+            // nextWateringDate부터 주기별로 반복되는 날짜 중 선택된 날짜에 해당하는지 확인
+            val next = plant.nextWateringDate
+            if (next >= startOfDay && next < endOfDay) return@filter true
+            if (next > endOfDay) return@filter false
+
+            // next가 과거인 경우: 주기를 더해서 선택된 날짜에 맞는지 계산
+            val diff = startOfDay - next
+            val remainder = diff % cycleMs
+            remainder < (24 * 60 * 60 * 1000L)
+        }
     }
 
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text(text = "달력 일정 📅", fontWeight = FontWeight.Bold, color = OnGreenBackground) },
+                title = {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.CalendarMonth,
+                            contentDescription = "달력 일정",
+                            tint = GreenPrimary,
+                            modifier = Modifier.size(22.dp)
+                        )
+                        Text(
+                            text = "달력 일정",
+                            fontWeight = FontWeight.Bold,
+                            color = OnGreenBackground
+                        )
+                    }
+                },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = MaterialTheme.colorScheme.background
                 )
@@ -87,23 +118,6 @@ fun ScheduleScreen(
                 .padding(horizontal = 16.dp),
             verticalArrangement = Arrangement.spacedBy(20.dp)
         ) {
-            
-            // 관리 일정 상부 소개
-            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Text(
-                    text = "관리 일정",
-                    fontSize = 22.sp,
-                    fontWeight = FontWeight.ExtraBold,
-                    color = OnGreenBackground
-                )
-                Text(
-                    text = "우리 초록이들의 급수 식사 시간을 체크해 두세요.",
-                    fontSize = 13.sp,
-                    color = GrayTextSecondary,
-                    fontWeight = FontWeight.Medium
-                )
-            }
-
             // 가로 슬라이딩 날짜 7일 피커 (가연그린 일정 4-달력 구현 포인트)
             Card(
                 modifier = Modifier.fillMaxWidth(),
@@ -191,12 +205,23 @@ fun ScheduleScreen(
                     format.format(Date(selectedCalendarDate))
                 }
                 
-                Text(
-                    text = "$selectedDayName 일정 💧",
-                    fontSize = 16.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = OnGreenBackground
-                )
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Text(
+                        text = "$selectedDayName 일정",
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = OnGreenBackground
+                    )
+                    Icon(
+                        imageVector = Icons.Filled.CalendarToday,
+                        contentDescription = "선택 날짜 일정",
+                        tint = GreenPrimary,
+                        modifier = Modifier.size(18.dp)
+                    )
+                }
                 Text(
                     text = "${scheduledPlants.size} PLANTS",
                     fontSize = 12.sp,
@@ -250,12 +275,24 @@ fun ScheduleScreen(
                         verticalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
                         items(scheduledPlants, key = { it.id }) { plant ->
+                            val isWatered = remember(plant.lastWateredDate, startOfDay, endOfDay) {
+                                plant.lastWateredDate in startOfDay until endOfDay
+                            }
+
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
                                     .clip(RoundedCornerShape(16.dp))
-                                    .background(MaterialTheme.colorScheme.surface)
-                                    .border(1.dp, MaterialTheme.colorScheme.surfaceVariant, RoundedCornerShape(16.dp))
+                                    .background(
+                                        if (isWatered) GreenTertiary.copy(alpha = 0.18f)
+                                        else MaterialTheme.colorScheme.surface
+                                    )
+                                    .border(
+                                        1.dp,
+                                        if (isWatered) GreenSecondary.copy(alpha = 0.22f)
+                                        else MaterialTheme.colorScheme.surfaceVariant,
+                                        RoundedCornerShape(16.dp)
+                                    )
                                     .clickable { onNavigateToDetail(plant.id) }
                                     .padding(14.dp)
                                     .testTag("schedule_item_${plant.id}"),
@@ -270,10 +307,15 @@ fun ScheduleScreen(
                                         modifier = Modifier
                                             .size(42.dp)
                                             .clip(CircleShape)
-                                            .background(GreenSurfaceVariant)
+                                            .background(Color(0xFFF8EEDC))
                                             .wrapContentSize(Alignment.Center)
                                     ) {
-                                        Text(getPlantEmoji(plant.name), fontSize = 20.sp)
+                                        Icon(
+                                            imageVector = getPlantTypeIcon(plant.name),
+                                            contentDescription = "식물",
+                                            tint = getPlantTypeIconColor(plant.name),
+                                            modifier = Modifier.size(22.dp)
+                                        )
                                     }
 
                                     Column {
@@ -286,7 +328,7 @@ fun ScheduleScreen(
                                             overflow = TextOverflow.Ellipsis
                                         )
                                         Text(
-                                            text = "${plant.name} • ${plant.wateringCycleDays}일 간격 급수 필요",
+                                            text = "${plant.name} • ${plant.wateringCycleDays}일 간격",
                                             fontSize = 11.sp,
                                             color = GrayTextSecondary,
                                             maxLines = 1,
@@ -295,22 +337,42 @@ fun ScheduleScreen(
                                     }
                                 }
 
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(4.dp)
-                                ) {
-                                    Icon(
-                                        imageVector = Icons.Filled.WaterDrop,
-                                        contentDescription = "Water Needs",
-                                        tint = BlueWater,
-                                        modifier = Modifier.size(14.dp)
-                                    )
-                                    Text(
-                                        text = "물주기",
-                                        fontSize = 12.sp,
-                                        color = BlueWater,
-                                        fontWeight = FontWeight.Bold
-                                    )
+                                if (isWatered) {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Filled.CheckCircle,
+                                            contentDescription = "Watered",
+                                            tint = GreenPrimary,
+                                            modifier = Modifier.size(16.dp)
+                                        )
+                                        Text(
+                                            text = "완료",
+                                            fontSize = 12.sp,
+                                            color = GreenPrimary,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                    }
+                                } else {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(4.dp)
+                                    ) {
+                                        Icon(
+                                            imageVector = Icons.Filled.WaterDrop,
+                                            contentDescription = "Water Needs",
+                                            tint = BlueWater,
+                                            modifier = Modifier.size(14.dp)
+                                        )
+                                        Text(
+                                            text = "물주기",
+                                            fontSize = 12.sp,
+                                            color = BlueWater,
+                                            fontWeight = FontWeight.Bold
+                                        )
+                                    }
                                 }
                             }
                         }
