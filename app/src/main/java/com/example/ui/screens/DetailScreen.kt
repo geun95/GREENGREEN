@@ -13,6 +13,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
+import androidx.compose.material.icons.filled.ChatBubble
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -20,11 +21,14 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import android.net.Uri
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import coil.compose.AsyncImage
 import com.example.data.Plant
 import com.example.ui.theme.*
 import com.example.ui.viewmodel.PlantViewModel
@@ -35,6 +39,7 @@ fun DetailScreen(
     plantId: Int,
     viewModel: PlantViewModel,
     onNavigateBack: () -> Unit,
+    onNavigateToChat: (Int) -> Unit,
     modifier: Modifier = Modifier
 ) {
     val plants by viewModel.allPlants.collectAsStateWithLifecycle()
@@ -82,7 +87,24 @@ fun DetailScreen(
     Scaffold(
         topBar = {
             TopAppBar(
-                title = { Text(text = "성장 아카이브 📔", fontWeight = FontWeight.Bold, color = OnGreenBackground) },
+                title = {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.MenuBook,
+                            contentDescription = "성장 아카이브",
+                            tint = GreenPrimary,
+                            modifier = Modifier.size(22.dp)
+                        )
+                        Text(
+                            text = "성장 아카이브",
+                            fontWeight = FontWeight.Bold,
+                            color = OnGreenBackground
+                        )
+                    }
+                },
                 navigationIcon = {
                     IconButton(onClick = onNavigateBack) {
                         Icon(imageVector = Icons.Filled.ArrowBack, contentDescription = "Back", tint = OnGreenBackground)
@@ -116,35 +138,71 @@ fun DetailScreen(
                 .padding(bottom = 24.dp),
             verticalArrangement = Arrangement.spacedBy(18.dp)
         ) {
-            // 상단 배너 카드 (일러스트, 이름, 생후 경과)
+            // 상단 배너 카드 (사진, 이름, 생후 경과)
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(200.dp)
                     .background(getPlantBackgroundBrush(plant.name))
-                    .padding(20.dp)
             ) {
-                // 이모지 배경 일러스트
-                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Text(text = getPlantEmoji(plant.name), fontSize = 72.sp)
+                val hasPhoto = !plant.imageUri.isNullOrEmpty() && plant.imageUri != "default"
+                if (hasPhoto) {
+                    AsyncImage(
+                        model = Uri.parse(plant.imageUri),
+                        contentDescription = plant.nickname,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.fillMaxSize()
+                    )
+                } else {
+                    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        Icon(
+                            imageVector = Icons.Filled.Eco,
+                            contentDescription = "식물",
+                            tint = GreenPrimary,
+                            modifier = Modifier.size(72.dp)
+                        )
+                    }
                 }
 
+                // 텍스트 가독성을 위한 하단 그라데이션
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(120.dp)
+                        .align(Alignment.BottomCenter)
+                        .background(
+                            Brush.verticalGradient(
+                                colors = listOf(Color.Transparent, Color.Black.copy(alpha = 0.5f))
+                            )
+                        )
+                )
+
                 Column(
-                    modifier = Modifier.align(Alignment.BottomStart)
+                    modifier = Modifier.align(Alignment.BottomStart).padding(20.dp)
                 ) {
-                    // 생후 며칠 째 (지은그린 포인트)
                     Box(
                         modifier = Modifier
                             .clip(RoundedCornerShape(30.dp))
                             .background(Color.White.copy(alpha = 0.25f))
                             .padding(horizontal = 10.dp, vertical = 4.dp)
                     ) {
-                        Text(
-                            text = "생후 ${daysGrown}일째 🌱",
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = Color.White
-                        )
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)
+                        ) {
+                            Text(
+                                text = "생후 ${daysGrown}일째",
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = Color.White
+                            )
+                            Icon(
+                                imageVector = Icons.Filled.Grass,
+                                contentDescription = "새싹",
+                                tint = Color.White,
+                                modifier = Modifier.size(13.dp)
+                            )
+                        }
                     }
                     Spacer(modifier = Modifier.height(4.dp))
                     Text(
@@ -260,12 +318,37 @@ fun DetailScreen(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(8.dp)
                     ) {
-                        Icon(imageVector = Icons.Filled.WaterDrop, contentDescription = null, tint = Color.White)
                         Text(
-                            text = "물 줬어요! 🚿",
+                            text = "물 줬어요!",
                             fontSize = 16.sp,
                             fontWeight = FontWeight.Bold,
                             color = Color.White
+                        )
+                        Icon(imageVector = Icons.Filled.WaterDrop, contentDescription = null, tint = Color.White)
+                    }
+                }
+
+                // AI 상담하기 버튼
+                OutlinedButton(
+                    onClick = { onNavigateToChat(plant.id) },
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = GreenPrimary),
+                    border = BorderStroke(1.5.dp, GreenPrimary),
+                    shape = RoundedCornerShape(14.dp),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(54.dp)
+                        .testTag("ai_chat_btn")
+                ) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        Icon(imageVector = Icons.Filled.ChatBubble, contentDescription = null, tint = GreenPrimary)
+                        Text(
+                            text = "AI 상담하기",
+                            fontSize = 16.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = GreenPrimary
                         )
                     }
                 }
@@ -301,83 +384,6 @@ fun DetailScreen(
                     )
                 }
 
-                // AI 케어 브리핑 (지은그린 포인트)
-                Text(
-                    text = "AI 케어 브리핑 📢",
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Bold,
-                    color = OnGreenBackground,
-                    modifier = Modifier.padding(top = 8.dp)
-                )
-
-                Card(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .testTag("ai_care_briefing_card"),
-                    colors = CardDefaults.cardColors(containerColor = GreenSurfaceVariant.copy(alpha = 0.4f)),
-                    shape = RoundedCornerShape(16.dp)
-                ) {
-                    Column(
-                        modifier = Modifier.padding(16.dp),
-                        verticalArrangement = Arrangement.spacedBy(12.dp)
-                    ) {
-                        // 뉴 라인으로 나누어진 케어 항목 출력
-                        val bullets = remember(plant.aiBriefing) {
-                            plant.aiBriefing.split("\n")
-                                .map { it.trim() }
-                                .filter { it.isNotEmpty() }
-                        }
-
-                        if (bullets.isEmpty()) {
-                            Text(
-                                text = "식물 아카이브 정보가 분석 중입니다.",
-                                fontSize = 14.sp,
-                                color = OnGreenBackground
-                            )
-                        } else {
-                            bullets.forEach { bullet ->
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    verticalAlignment = Alignment.Top,
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                                ) {
-                                    val isNumbered = bullet.firstOrNull()?.isDigit() == true && bullet.getOrNull(1) == '.'
-                                    
-                                    Box(
-                                        modifier = Modifier
-                                            .size(20.dp)
-                                            .clip(CircleShape)
-                                            .background(GreenPrimary)
-                                            .wrapContentSize(Alignment.Center),
-                                        contentAlignment = Alignment.Center
-                                    ) {
-                                        Text(
-                                            text = if (isNumbered) bullet.first().toString() else "🌱",
-                                            fontSize = 11.sp,
-                                            fontWeight = FontWeight.Bold,
-                                            color = Color.White
-                                        )
-                                    }
-                                    
-                                    val cleanedText = if (isNumbered) {
-                                        bullet.substring(2).trim()
-                                    } else {
-                                        bullet
-                                    }
-
-                                    Text(
-                                        text = cleanedText,
-                                        fontSize = 13.5.sp,
-                                        fontWeight = FontWeight.Medium,
-                                        color = OnGreenBackground,
-                                        lineHeight = 20.sp,
-                                        modifier = Modifier.weight(1f)
-                                    )
-                                }
-                            }
-                        }
-                    }
-                }
             }
         }
     }

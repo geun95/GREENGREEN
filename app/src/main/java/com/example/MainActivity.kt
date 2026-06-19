@@ -34,6 +34,7 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.ui.screens.*
 import com.example.ui.theme.*
 import com.example.ui.viewmodel.PlantViewModel
@@ -75,9 +76,8 @@ class MainActivity : ComponentActivity() {
                                     selected = currentRoute == "home",
                                     onClick = {
                                         navController.navigate("home") {
-                                            popUpTo("home") { saveState = true }
+                                            popUpTo("home") { inclusive = false }
                                             launchSingleTop = true
-                                            restoreState = true
                                         }
                                     },
                                     icon = {
@@ -100,9 +100,8 @@ class MainActivity : ComponentActivity() {
                                     selected = currentRoute == "my_plants",
                                     onClick = {
                                         navController.navigate("my_plants") {
-                                            popUpTo("home") { saveState = true }
+                                            popUpTo("home") { inclusive = false }
                                             launchSingleTop = true
-                                            restoreState = true
                                         }
                                     },
                                     icon = {
@@ -125,9 +124,8 @@ class MainActivity : ComponentActivity() {
                                     selected = currentRoute == "schedule",
                                     onClick = {
                                         navController.navigate("schedule") {
-                                            popUpTo("home") { saveState = true }
+                                            popUpTo("home") { inclusive = false }
                                             launchSingleTop = true
-                                            restoreState = true
                                         }
                                     },
                                     icon = {
@@ -194,9 +192,8 @@ class MainActivity : ComponentActivity() {
                                 onNavigateBack = { navController.popBackStack() },
                                 onPlantCreated = {
                                     navController.navigate("my_plants") {
-                                        popUpTo("home") { saveState = true }
+                                        popUpTo("home") { inclusive = false }
                                         launchSingleTop = true
-                                        restoreState = true
                                     }
                                 }
                             )
@@ -206,8 +203,21 @@ class MainActivity : ComponentActivity() {
                             DetailScreen(
                                 plantId = id,
                                 viewModel = viewModel,
-                                onNavigateBack = { navController.popBackStack() }
+                                onNavigateBack = { navController.popBackStack() },
+                                onNavigateToChat = { plantId -> navController.navigate("chat/$plantId") }
                             )
+                        }
+                        composable("chat/{plantId}") { backStackEntry ->
+                            val id = backStackEntry.arguments?.getString("plantId")?.toIntOrNull() ?: 0
+                            val plants by viewModel.allPlants.collectAsStateWithLifecycle()
+                            val plant = plants.find { it.id == id }
+                            if (plant != null) {
+                                ChatScreen(
+                                    plant = plant,
+                                    viewModel = viewModel,
+                                    onNavigateBack = { navController.popBackStack() }
+                                )
+                            }
                         }
                         composable("schedule") {
                             ScheduleScreen(
