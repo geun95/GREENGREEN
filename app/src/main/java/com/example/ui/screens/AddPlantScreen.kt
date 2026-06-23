@@ -1,9 +1,14 @@
 package com.example.ui.screens
 
+import android.Manifest
+import android.content.pm.PackageManager
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.ContextCompat
+import androidx.core.content.FileProvider
+import java.io.File
 import androidx.compose.animation.*
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.BorderStroke
@@ -21,7 +26,9 @@ import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.CameraAlt
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Eco
+import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.PhotoCamera
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -81,6 +88,52 @@ fun AddPlantScreen(
                 )
             } catch (_: SecurityException) { }
             selectedImageUri = uri
+        }
+    }
+
+    // 카메라 촬영 설정
+    var cameraImageUri by remember { mutableStateOf<Uri?>(null) }
+
+    val cameraLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.TakePicture()
+    ) { success: Boolean ->
+        if (success && cameraImageUri != null) {
+            selectedImageUri = cameraImageUri
+        }
+    }
+
+    fun createCameraImageUri(): Uri {
+        val photoDir = File(context.cacheDir, "camera_photos")
+        photoDir.mkdirs()
+        val photoFile = File(photoDir, "plant_${System.currentTimeMillis()}.jpg")
+        return FileProvider.getUriForFile(
+            context,
+            "${context.packageName}.fileprovider",
+            photoFile
+        )
+    }
+
+    fun launchCamera() {
+        val uri = createCameraImageUri()
+        cameraImageUri = uri
+        cameraLauncher.launch(uri)
+    }
+
+    val cameraPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestPermission()
+    ) { granted: Boolean ->
+        if (granted) {
+            launchCamera()
+        }
+    }
+
+    fun onTakePhoto() {
+        if (ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA)
+            == PackageManager.PERMISSION_GRANTED
+        ) {
+            launchCamera()
+        } else {
+            cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
         }
     }
 
@@ -155,6 +208,7 @@ fun AddPlantScreen(
                                 )
                             )
                         },
+                        onTakePhoto = { onTakePhoto() },
                         onStartAnalysis = {
                             viewModel.analyzePlantImage(context, selectedImageUri)
                         }
@@ -195,6 +249,7 @@ fun AddPlantScreen(
 fun SelectImageStep(
     selectedUri: Uri?,
     onPickPhoto: () -> Unit,
+    onTakePhoto: () -> Unit,
     onStartAnalysis: () -> Unit
 ) {
     Column(
@@ -257,14 +312,47 @@ fun SelectImageStep(
             }
         }
 
-        Button(
-            onClick = onPickPhoto,
-            colors = ButtonDefaults.buttonColors(containerColor = GreenSurfaceVariant),
-            shape = RoundedCornerShape(12.dp),
-            contentPadding = PaddingValues(horizontal = 20.dp, vertical = 10.dp),
-            modifier = Modifier.testTag("pick_image_btn")
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+            modifier = Modifier.fillMaxWidth()
         ) {
-            Text("기기 갤러리 탐색하기", color = GreenPrimary, fontWeight = FontWeight.Bold)
+            Button(
+                onClick = onTakePhoto,
+                colors = ButtonDefaults.buttonColors(containerColor = GreenPrimary),
+                shape = RoundedCornerShape(12.dp),
+                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 10.dp),
+                modifier = Modifier
+                    .weight(1f)
+                    .testTag("take_photo_btn")
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.PhotoCamera,
+                    contentDescription = null,
+                    tint = Color.White,
+                    modifier = Modifier.size(18.dp)
+                )
+                Spacer(modifier = Modifier.width(6.dp))
+                Text("카메라 촬영", color = Color.White, fontWeight = FontWeight.Bold)
+            }
+
+            Button(
+                onClick = onPickPhoto,
+                colors = ButtonDefaults.buttonColors(containerColor = GreenSurfaceVariant),
+                shape = RoundedCornerShape(12.dp),
+                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 10.dp),
+                modifier = Modifier
+                    .weight(1f)
+                    .testTag("pick_image_btn")
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.Image,
+                    contentDescription = null,
+                    tint = GreenPrimary,
+                    modifier = Modifier.size(18.dp)
+                )
+                Spacer(modifier = Modifier.width(6.dp))
+                Text("갤러리 선택", color = GreenPrimary, fontWeight = FontWeight.Bold)
+            }
         }
 
         // 분류 가능 식물 안내
