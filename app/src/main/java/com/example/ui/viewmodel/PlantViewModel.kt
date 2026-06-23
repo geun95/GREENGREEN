@@ -172,6 +172,21 @@ class PlantViewModel(application: Application) : AndroidViewModel(application) {
         return withContext(Dispatchers.IO) {
             try {
                 val client = LocationServices.getFusedLocationProviderClient(context)
+                val lastLocation = suspendCancellableCoroutine { cont ->
+                    client.lastLocation
+                        .addOnSuccessListener { location ->
+                            cont.resume(location)
+                        }
+                        .addOnFailureListener {
+                            cont.resume(null)
+                        }
+                }
+                if (lastLocation != null) {
+                    Log.d("PlantViewModel", "Using lastLocation (fast path)")
+                    return@withContext Pair(lastLocation.latitude, lastLocation.longitude)
+                }
+
+                Log.d("PlantViewModel", "lastLocation null, requesting fresh location")
                 suspendCancellableCoroutine { cont ->
                     client.getCurrentLocation(
                         Priority.PRIORITY_BALANCED_POWER_ACCURACY,

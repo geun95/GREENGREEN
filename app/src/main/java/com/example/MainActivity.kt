@@ -35,6 +35,7 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.example.notification.WateringReminderWorker
 import com.example.ui.screens.*
 import com.example.ui.theme.*
 import com.example.ui.viewmodel.PlantViewModel
@@ -48,6 +49,8 @@ class MainActivity : ComponentActivity() {
         
         val viewModel = ViewModelProvider(this)[PlantViewModel::class.java]
 
+        WateringReminderWorker.scheduleReminder(this)
+
         setContent {
             MyApplicationTheme {
                 val navController = rememberNavController()
@@ -56,7 +59,7 @@ class MainActivity : ComponentActivity() {
 
                 // 전체 바의 표출 유무 결정 (하위 세부 등록/분석 중 화면에서는 가려줌)
                 val isBottomBarVisible = remember(currentRoute) {
-                    currentRoute == "home" || currentRoute == "my_plants" || currentRoute == "schedule"
+                    currentRoute == "home" || currentRoute == "my_plants" || currentRoute == "schedule" || currentRoute == "settings"
                 }
 
                 Scaffold(
@@ -142,6 +145,30 @@ class MainActivity : ComponentActivity() {
                                     ),
                                     modifier = Modifier.testTag("nav_schedule")
                                 )
+
+                                // 4. 설정 탭
+                                NavigationBarItem(
+                                    selected = currentRoute == "settings",
+                                    onClick = {
+                                        navController.navigate("settings") {
+                                            popUpTo("home") { inclusive = false }
+                                            launchSingleTop = true
+                                        }
+                                    },
+                                    icon = {
+                                        Icon(
+                                            imageVector = if (currentRoute == "settings") Icons.Filled.Settings else Icons.Outlined.Settings,
+                                            contentDescription = "설정"
+                                        )
+                                    },
+                                    label = { Text("설정", fontSize = 10.sp, fontWeight = FontWeight.Bold) },
+                                    colors = NavigationBarItemDefaults.colors(
+                                        selectedIconColor = GreenPrimary,
+                                        selectedTextColor = GreenPrimary,
+                                        indicatorColor = GreenSurfaceVariant
+                                    ),
+                                    modifier = Modifier.testTag("nav_settings")
+                                )
                             }
                         }
                     },
@@ -224,6 +251,11 @@ class MainActivity : ComponentActivity() {
                                 viewModel = viewModel,
                                 onNavigateToDetail = { id -> navController.navigate("plant_detail/$id") },
                                 modifier = Modifier.padding(bottom = if (isBottomBarVisible) 48.dp else 0.dp)
+                            )
+                        }
+                        composable("settings") {
+                            SettingsScreen(
+                                onNavigateBack = { navController.popBackStack() }
                             )
                         }
                     }
