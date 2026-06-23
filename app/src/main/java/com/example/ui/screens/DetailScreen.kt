@@ -14,6 +14,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.filled.ChatBubble
+import androidx.compose.material.icons.filled.Compare
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -31,6 +32,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
 import com.example.data.Plant
 import com.example.ui.theme.*
+import com.example.ui.viewmodel.CompareUiState
 import com.example.ui.viewmodel.PlantViewModel
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -43,9 +45,14 @@ fun DetailScreen(
     modifier: Modifier = Modifier
 ) {
     val plants by viewModel.allPlants.collectAsStateWithLifecycle()
-    
+    val compareState by viewModel.compareState.collectAsStateWithLifecycle()
+
     val plant = remember(plants, plantId) {
         plants.find { it.id == plantId }
+    }
+
+    DisposableEffect(Unit) {
+        onDispose { viewModel.resetCompareState() }
     }
 
     if (plant == null) {
@@ -83,6 +90,11 @@ fun DetailScreen(
         animationSpec = tween(1000),
         label = "HydrationProgress"
     )
+
+    val needsWatering = remember(plant.lastWateredDate, plant.nextWateringDate, plant.wateringCycleDays) {
+        isPlantNeedsWateringToday(plant)
+    }
+    val detailBgColor = if (needsWatering) Color(0xFFE8DCC8) else MaterialTheme.colorScheme.background
 
     Scaffold(
         topBar = {
@@ -123,11 +135,11 @@ fun DetailScreen(
                     }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.background
+                    containerColor = detailBgColor
                 )
             )
         },
-        containerColor = MaterialTheme.colorScheme.background,
+        containerColor = detailBgColor,
         modifier = modifier
     ) { innerPadding ->
         Column(
@@ -136,13 +148,13 @@ fun DetailScreen(
                 .padding(innerPadding)
                 .verticalScroll(rememberScrollState())
                 .padding(bottom = 24.dp),
-            verticalArrangement = Arrangement.spacedBy(18.dp)
+            verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
             // 상단 배너 카드 (사진, 이름, 생후 경과)
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(200.dp)
+                    .height(250.dp)
                     .background(getPlantBackgroundBrush(plant.name))
             ) {
                 val hasPhoto = !plant.imageUri.isNullOrEmpty() && plant.imageUri != "default"
@@ -222,7 +234,7 @@ fun DetailScreen(
 
             Column(
                 modifier = Modifier.padding(horizontal = 16.dp),
-                verticalArrangement = Arrangement.spacedBy(16.dp)
+                verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 // 수분 밸런스 등급 바 (수분 밸런스 - 지은그린 포인트)
                 Card(
@@ -311,7 +323,7 @@ fun DetailScreen(
                     shape = RoundedCornerShape(14.dp),
                     modifier = Modifier
                         .fillMaxWidth()
-                        .height(54.dp)
+                        .height(46.dp)
                         .testTag("water_given_btn")
                 ) {
                     Row(
@@ -328,29 +340,165 @@ fun DetailScreen(
                     }
                 }
 
-                // AI 상담하기 버튼
-                OutlinedButton(
-                    onClick = { onNavigateToChat(plant.id) },
-                    colors = ButtonDefaults.outlinedButtonColors(contentColor = GreenPrimary),
-                    border = BorderStroke(1.5.dp, GreenPrimary),
-                    shape = RoundedCornerShape(14.dp),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(54.dp)
-                        .testTag("ai_chat_btn")
+                // AI 상담하기 + 내 식물 비교하기 (한 줄)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp)
+                    OutlinedButton(
+                        onClick = { onNavigateToChat(plant.id) },
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = GreenPrimary),
+                        border = BorderStroke(1.5.dp, GreenPrimary),
+                        shape = RoundedCornerShape(14.dp),
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(46.dp)
+                            .testTag("ai_chat_btn")
                     ) {
-                        Icon(imageVector = Icons.Filled.ChatBubble, contentDescription = null, tint = GreenPrimary)
+                        Icon(imageVector = Icons.Filled.ChatBubble, contentDescription = null, tint = GreenPrimary, modifier = Modifier.size(16.dp))
+                        Spacer(modifier = Modifier.width(4.dp))
+                        Text(text = "AI 상담", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = GreenPrimary)
+                    }
+
+                    OutlinedButton(
+                        onClick = { viewModel.downloadReferenceImage(plant) },
+                        enabled = compareState !is CompareUiState.Loading,
+                        colors = ButtonDefaults.outlinedButtonColors(contentColor = GoldAccent),
+                        border = BorderStroke(1.5.dp, GoldAccent),
+                        shape = RoundedCornerShape(14.dp),
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(46.dp)
+                            .testTag("compare_plant_btn")
+                    ) {
+                        if (compareState is CompareUiState.Loading) {
+                            CircularProgressIndicator(color = GoldAccent, modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                        } else {
+                            Icon(imageVector = Icons.Filled.Compare, contentDescription = null, tint = GoldAccent, modifier = Modifier.size(16.dp))
+                        }
+                        Spacer(modifier = Modifier.width(4.dp))
                         Text(
-                            text = "AI 상담하기",
-                            fontSize = 16.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = GreenPrimary
+                            text = if (compareState is CompareUiState.Loading) "다운로드 중..." else "식물 비교",
+                            fontSize = 13.sp, fontWeight = FontWeight.Bold, color = GoldAccent
                         )
                     }
+                }
+
+                // 비교 결과 카드
+                when (val state = compareState) {
+                    is CompareUiState.Success -> {
+                        Card(
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
+                            shape = RoundedCornerShape(16.dp),
+                            border = BorderStroke(1.dp, GoldAccent.copy(alpha = 0.5f))
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(16.dp),
+                                verticalArrangement = Arrangement.spacedBy(12.dp)
+                            ) {
+                                Text(
+                                    text = "🔍 식물 비교",
+                                    fontSize = 16.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = OnGreenBackground
+                                )
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    // 내 식물 사진
+                                    Column(
+                                        horizontalAlignment = Alignment.CenterHorizontally,
+                                        modifier = Modifier.weight(1f)
+                                    ) {
+                                        Text(
+                                            text = "내 식물",
+                                            fontSize = 12.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = GreenPrimary
+                                        )
+                                        Spacer(modifier = Modifier.height(4.dp))
+                                        Box(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .aspectRatio(1f)
+                                                .clip(RoundedCornerShape(12.dp))
+                                                .background(MaterialTheme.colorScheme.surfaceVariant),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            val hasPhoto = !plant.imageUri.isNullOrEmpty() && plant.imageUri != "default"
+                                            if (hasPhoto) {
+                                                AsyncImage(
+                                                    model = Uri.parse(plant.imageUri),
+                                                    contentDescription = "내 식물",
+                                                    contentScale = ContentScale.Crop,
+                                                    modifier = Modifier.fillMaxSize()
+                                                )
+                                            } else {
+                                                Icon(
+                                                    imageVector = Icons.Filled.Eco,
+                                                    contentDescription = null,
+                                                    tint = GreenPrimary,
+                                                    modifier = Modifier.size(40.dp)
+                                                )
+                                            }
+                                        }
+                                    }
+
+                                    // 농사로 공식 사진
+                                    Column(
+                                        horizontalAlignment = Alignment.CenterHorizontally,
+                                        modifier = Modifier.weight(1f)
+                                    ) {
+                                        Text(
+                                            text = "공식 사진",
+                                            fontSize = 12.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = GoldAccent
+                                        )
+                                        Spacer(modifier = Modifier.height(4.dp))
+                                        Box(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .aspectRatio(1f)
+                                                .clip(RoundedCornerShape(12.dp))
+                                                .background(MaterialTheme.colorScheme.surfaceVariant),
+                                            contentAlignment = Alignment.Center
+                                        ) {
+                                            AsyncImage(
+                                                model = state.referenceImageUri,
+                                                contentDescription = "농사로 공식 이미지",
+                                                contentScale = ContentScale.Crop,
+                                                modifier = Modifier.fillMaxSize()
+                                            )
+                                        }
+                                    }
+                                }
+                                Text(
+                                    text = "농사로(nongsaro.go.kr) 제공 이미지와 비교해 보세요.\n다운로드 폴더에도 저장되었습니다.",
+                                    fontSize = 11.sp,
+                                    color = GrayTextSecondary,
+                                    lineHeight = 16.sp
+                                )
+                            }
+                        }
+                    }
+                    is CompareUiState.Error -> {
+                        Card(
+                            modifier = Modifier.fillMaxWidth(),
+                            colors = CardDefaults.cardColors(containerColor = Color(0xFFFFF3E0)),
+                            shape = RoundedCornerShape(12.dp)
+                        ) {
+                            Text(
+                                text = state.message,
+                                modifier = Modifier.padding(16.dp),
+                                fontSize = 13.sp,
+                                color = Color(0xFFE65100)
+                            )
+                        }
+                    }
+                    else -> {}
                 }
 
                 // 식물 기본 스펙 속성 3종 요식업

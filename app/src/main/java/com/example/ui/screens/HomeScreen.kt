@@ -91,7 +91,7 @@ fun HomeScreen(
     }
 
     // 오늘 아직 물을 안 준 식물 수
-    val remainingToWaterCount = remember(todayWateringPlants) {
+    val remainingToWaterCount = remember(plants) {
         todayWateringPlants.count { it.lastWateredDate !in todayStart until todayEnd }
     }
 
@@ -153,7 +153,8 @@ fun HomeScreen(
             item {
                 HeaderWeatherBox(
                     message = headerMessage,
-                    weatherState = weatherState
+                    weatherState = weatherState,
+                    hasUnwateredPlants = remainingToWaterCount > 0
                 )
             }
 
@@ -191,11 +192,14 @@ fun HomeScreen(
 @Composable
 fun HeaderWeatherBox(
     message: String,
-    weatherState: WeatherUiState
+    weatherState: WeatherUiState,
+    hasUnwateredPlants: Boolean = false
 ) {
-    val gradientBrush = Brush.verticalGradient(
-        colors = listOf(GreenPrimary, GreenSecondary)
-    )
+    val gradientBrush = if (hasUnwateredPlants) {
+        Brush.verticalGradient(colors = listOf(Color(0xFFA89060), Color(0xFFC4A870)))
+    } else {
+        Brush.verticalGradient(colors = listOf(GreenPrimary, GreenSecondary))
+    }
 
     Box(
         modifier = Modifier
@@ -432,4 +436,19 @@ fun getStartOfToday(): Long {
     cal.set(Calendar.SECOND, 0)
     cal.set(Calendar.MILLISECOND, 0)
     return cal.timeInMillis
+}
+
+fun isPlantNeedsWateringToday(plant: Plant): Boolean {
+    val todayStart = getStartOfToday()
+    val todayEnd = todayStart + (24 * 60 * 60 * 1000L)
+    val cycleDays = plant.wateringCycleDays
+    if (cycleDays <= 0) return false
+    val cycleMs = cycleDays * 24 * 60 * 60 * 1000L
+    val next = plant.nextWateringDate
+    val isWateringDay = if (next < todayEnd) true else {
+        val diff = todayStart - next
+        if (diff < 0) false else (diff % cycleMs) < (24 * 60 * 60 * 1000L)
+    }
+    val isWateredToday = plant.lastWateredDate in todayStart until todayEnd
+    return isWateringDay && !isWateredToday
 }

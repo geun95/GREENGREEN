@@ -18,7 +18,8 @@ data class PlantCareData(
     val winterMinTemperature: String,
     val humidity: String,
     val manageLevel: String,
-    val fertilizer: String
+    val fertilizer: String,
+    val imageUrl: String = ""
 )
 
 object NongsaroApi {
@@ -36,42 +37,64 @@ object NongsaroApi {
         return fetchDetail(cntntsNo)
     }
 
-    private fun searchCntntsNo(plantName: String): String? {
+    suspend fun searchPlantImageUrl(plantName: String): String? {
+        val result = searchListResult(plantName) ?: return null
+        val urls = result.imageUrl ?: return null
+        return urls.split("|").firstOrNull { it.isNotBlank() }
+    }
+
+    data class ListResult(val cntntsNo: String, val imageUrl: String?)
+
+    private fun searchListResult(plantName: String): ListResult? {
         val url = "$BASE_URL/gardenList?apiKey=$API_KEY&sType=sCntntsSj&sText=$plantName"
         Log.d(TAG, "Searching: $url")
 
         val request = Request.Builder().url(url).build()
         val response = client.newCall(request).execute()
         val body = response.body?.string() ?: return null
+        Log.d(TAG, "gardenList response length: ${body.length}")
 
+        val fields = mutableMapOf<String, StringBuilder>()
         val parser = XmlPullParserFactory.newInstance().newPullParser()
         parser.setInput(StringReader(body))
 
-        var insideItem = false
+        var insideFirstItem = false
+        var foundFirstItem = false
         var currentTag = ""
-        var cntntsNo: String? = null
 
         while (parser.eventType != XmlPullParser.END_DOCUMENT) {
             when (parser.eventType) {
                 XmlPullParser.START_TAG -> {
                     currentTag = parser.name
-                    if (currentTag == "item") insideItem = true
+                    if (currentTag == "item" && !foundFirstItem) {
+                        insideFirstItem = true
+                        foundFirstItem = true
+                    }
                 }
                 XmlPullParser.TEXT -> {
-                    if (insideItem && currentTag == "cntntsNo" && cntntsNo == null) {
-                        cntntsNo = parser.text?.trim()
+                    if (insideFirstItem && currentTag.isNotEmpty()) {
+                        val text = parser.text?.trim()
+                        if (!text.isNullOrEmpty()) {
+                            fields.getOrPut(currentTag) { StringBuilder() }.append(text)
+                        }
                     }
                 }
                 XmlPullParser.END_TAG -> {
-                    if (parser.name == "item") insideItem = false
+                    if (parser.name == "item") insideFirstItem = false
                     currentTag = ""
                 }
             }
             parser.next()
         }
 
-        Log.d(TAG, "Found cntntsNo: $cntntsNo")
-        return cntntsNo
+        val cntntsNo = fields["cntntsNo"]?.toString()
+        val rtnFileUrl = fields["rtnFileUrl"]?.toString()
+        Log.d(TAG, "Found cntntsNo: $cntntsNo, rtnFileUrl present: ${!rtnFileUrl.isNullOrEmpty()}, fields: ${fields.keys}")
+        return if (cntntsNo != null) ListResult(cntntsNo, rtnFileUrl) else null
+    }
+
+    private fun searchCntntsNo(plantName: String): String? {
+        return searchListResult(plantName)?.cntntsNo
     }
 
     private fun fetchDetail(cntntsNo: String): PlantCareData? {
@@ -113,7 +136,8 @@ object NongsaroApi {
             winterMinTemperature = fields["winterLwetTpCodeNm"] ?: "",
             humidity = fields["hdCodeNm"] ?: "",
             manageLevel = fields["managelevelCodeNm"] ?: "",
-            fertilizer = fields["frtlzrInfo"] ?: ""
+            fertilizer = fields["frtlzrInfo"] ?: "",
+            imageUrl = fields["rtnFileUrl"] ?: ""
         )
     }
 }

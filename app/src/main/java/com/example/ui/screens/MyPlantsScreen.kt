@@ -244,9 +244,13 @@ fun PlantCard(
             }
 
             // 하부 식물 이름 텍스트 영역
+            val needsWatering = remember(plant.lastWateredDate, plant.nextWateringDate, plant.wateringCycleDays) {
+                isPlantNeedsWateringToday(plant)
+            }
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
+                    .background(if (needsWatering) Color(0xFFE8DCC8) else Color.Transparent)
                     .padding(12.dp),
                 verticalArrangement = Arrangement.spacedBy(4.dp)
             ) {

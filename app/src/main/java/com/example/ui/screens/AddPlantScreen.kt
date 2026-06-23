@@ -255,24 +255,23 @@ fun SelectImageStep(
     Column(
         modifier = Modifier
             .fillMaxSize()
-            .padding(20.dp)
-            .verticalScroll(rememberScrollState()),
+            .padding(horizontal = 20.dp, vertical = 12.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
-        verticalArrangement = Arrangement.spacedBy(24.dp)
+        verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
         Text(
             text = "카메라로 찍거나 갤러리에서 선택해 주시면\nAI가 자동으로 분석해 드릴게요.",
-            fontSize = 15.sp,
+            fontSize = 14.sp,
             color = GrayTextSecondary,
             textAlign = TextAlign.Center,
             fontWeight = FontWeight.Medium,
-            lineHeight = 22.sp,
-            modifier = Modifier.padding(bottom = 8.dp)
+            lineHeight = 20.sp
         )
 
         Box(
             modifier = Modifier
-                .size(200.dp)
+                .weight(1f)
+                .aspectRatio(1f)
                 .clip(RoundedCornerShape(32.dp))
                 .background(MaterialTheme.colorScheme.surface)
                 .border(
@@ -361,8 +360,8 @@ fun SelectImageStep(
                 .fillMaxWidth()
                 .clip(RoundedCornerShape(12.dp))
                 .background(MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.3f))
-                .padding(14.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
+                .padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp)
         ) {
             Row(
                 verticalAlignment = Alignment.CenterVertically,
@@ -372,30 +371,28 @@ fun SelectImageStep(
                     imageVector = Icons.Filled.Info,
                     contentDescription = null,
                     tint = GreenPrimary,
-                    modifier = Modifier.size(16.dp)
+                    modifier = Modifier.size(14.dp)
                 )
                 Text(
                     text = "현재 분류 가능한 식물 (5종)",
-                    fontSize = 13.sp,
+                    fontSize = 12.sp,
                     fontWeight = FontWeight.Bold,
                     color = OnGreenBackground
                 )
             }
             Text(
                 text = "몬스테라 · 산세베리아 · 스킨답서스 · 금전수 · 인도고무나무",
-                fontSize = 12.sp,
-                color = GrayTextSecondary,
-                lineHeight = 18.sp
-            )
-            Text(
-                text = "위 목록에 없는 식물도 촬영 가능하며, 분석 후 종류를 직접 수정할 수 있습니다.",
                 fontSize = 11.sp,
                 color = GrayTextSecondary,
                 lineHeight = 16.sp
             )
+            Text(
+                text = "위 목록에 없는 식물도 촬영 가능하며, 분석 후 종류를 직접 수정할 수 있습니다.",
+                fontSize = 10.sp,
+                color = GrayTextSecondary,
+                lineHeight = 14.sp
+            )
         }
-
-        Spacer(modifier = Modifier.height(16.dp))
 
         Button(
             onClick = onStartAnalysis,

@@ -2,11 +2,13 @@ package com.example.ui.viewmodel
 
 import android.Manifest
 import android.app.Application
+import android.app.DownloadManager
 import android.content.Context
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.net.Uri
+import android.os.Environment
 import android.util.Log
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.AndroidViewModel
@@ -46,6 +48,13 @@ sealed interface AnalysisUiState {
     data class Error(val message: String) : AnalysisUiState
 }
 
+sealed interface CompareUiState {
+    object Idle : CompareUiState
+    object Loading : CompareUiState
+    data class Success(val referenceImageUri: Uri, val sourceUrl: String) : CompareUiState
+    data class Error(val message: String) : CompareUiState
+}
+
 class PlantViewModel(application: Application) : AndroidViewModel(application) {
 
     private val repository: PlantRepository
@@ -69,6 +78,10 @@ class PlantViewModel(application: Application) : AndroidViewModel(application) {
     private val _wateredTodayIds = MutableStateFlow<Set<Int>>(emptySet())
     val wateredTodayIds: StateFlow<Set<Int>> = _wateredTodayIds.asStateFlow()
 
+    // 식물 비교 상태
+    private val _compareState = MutableStateFlow<CompareUiState>(CompareUiState.Idle)
+    val compareState: StateFlow<CompareUiState> = _compareState.asStateFlow()
+
     // 챗봇 상태
     private val _chatMessages = MutableStateFlow<List<ChatMessage>>(emptyList())
     val chatMessages: StateFlow<List<ChatMessage>> = _chatMessages.asStateFlow()
@@ -91,6 +104,23 @@ class PlantViewModel(application: Application) : AndroidViewModel(application) {
             )
             
         fetchWeather()
+        refreshOverdueWateringDates()
+    }
+
+    private fun refreshOverdueWateringDates() {
+        viewModelScope.launch {
+            val todayStart = getStartOfToday()
+            val cycleMs = 24 * 60 * 60 * 1000L
+            allPlants.first { it.isNotEmpty() || true }.forEach { plant ->
+                if (plant.wateringCycleDays <= 0) return@forEach
+                if (plant.nextWateringDate < todayStart) {
+                    val newCycleMs = plant.wateringCycleDays * cycleMs
+                    repository.updatePlant(plant.copy(
+                        nextWateringDate = todayStart,
+                    ))
+                }
+            }
+        }
     }
 
     // 위치 기반 날씨 데이터 가져오기
@@ -197,7 +227,10 @@ class PlantViewModel(application: Application) : AndroidViewModel(application) {
     fun waterPlant(plant: Plant) {
         viewModelScope.launch {
             val now = System.currentTimeMillis()
-            val updated = plant.copy(lastWateredDate = now)
+            val cycleMs = plant.wateringCycleDays * 24 * 60 * 60 * 1000L
+            val todayStart = getStartOfToday()
+            val nextDate = todayStart + cycleMs
+            val updated = plant.copy(lastWateredDate = now, nextWateringDate = nextDate)
             repository.updatePlant(updated)
         }
     }
@@ -489,6 +522,90 @@ class PlantViewModel(application: Application) : AndroidViewModel(application) {
                 temperature = "18~25도",
                 briefing = "1. 겉흙이 마르면 물을 충분히 주세요.\n2. 밝은 간접광이 드는 곳에 두세요.\n3. 통풍이 잘 되는 환경을 유지해주세요."
             )
+        }
+    }
+
+    // 농사로 공식 이미지 다운로드 (DownloadManager 사용)
+    fun downloadReferenceImage(plant: Plant) {
+        _compareState.value = CompareUiState.Loading
+        viewModelScope.launch {
+            try {
+                val baseName = plant.name.split("(").first().trim()
+                val searchName = when (baseName) {
+                    "인도고무나무" -> "데코라고무나무"
+                    else -> baseName
+                }
+                Log.d("PlantViewModel", "Compare search name: $searchName (from ${plant.name})")
+                val imageUrl = withContext(Dispatchers.IO) {
+                    NongsaroApi.searchPlantImageUrl(searchName)
+                }
+                Log.d("PlantViewModel", "Compare image URL: $imageUrl")
+
+                if (imageUrl.isNullOrEmpty()) {
+                    _compareState.value = CompareUiState.Error("'${searchName}'에 대한 이미지를 농사로에서 찾을 수 없습니다. 농사로에 등록되지 않은 식물일 수 있습니다.")
+                    return@launch
+                }
+
+                val context = getApplication<Application>()
+                val dm = context.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager
+                val fileName = "nongsaro_${plant.name}_${System.currentTimeMillis()}.jpg"
+
+                val request = DownloadManager.Request(Uri.parse(imageUrl))
+                    .setTitle("${plant.name} 참고 이미지")
+                    .setDescription("농사로 공식 식물 이미지 다운로드 중")
+                    .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
+                    .setDestinationInExternalPublicDir(Environment.DIRECTORY_DOWNLOADS, "GreenGreen/$fileName")
+
+                val downloadId = dm.enqueue(request)
+
+                withContext(Dispatchers.IO) {
+                    var downloading = true
+                    while (downloading) {
+                        val query = DownloadManager.Query().setFilterById(downloadId)
+                        val cursor = dm.query(query)
+                        if (cursor.moveToFirst()) {
+                            val statusIndex = cursor.getColumnIndex(DownloadManager.COLUMN_STATUS)
+                            when (cursor.getInt(statusIndex)) {
+                                DownloadManager.STATUS_SUCCESSFUL -> {
+                                    val uriIndex = cursor.getColumnIndex(DownloadManager.COLUMN_LOCAL_URI)
+                                    val localUri = cursor.getString(uriIndex)
+                                    _compareState.value = CompareUiState.Success(
+                                        referenceImageUri = Uri.parse(localUri),
+                                        sourceUrl = imageUrl
+                                    )
+                                    downloading = false
+                                }
+                                DownloadManager.STATUS_FAILED -> {
+                                    _compareState.value = CompareUiState.Error("다운로드에 실패했습니다.")
+                                    downloading = false
+                                }
+                            }
+                        }
+                        cursor.close()
+                        if (downloading) {
+                            kotlinx.coroutines.delay(500)
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e("PlantViewModel", "Reference image download error", e)
+                _compareState.value = CompareUiState.Error("이미지 다운로드 중 오류: ${e.message}")
+            }
+        }
+    }
+
+    fun resetCompareState() {
+        _compareState.value = CompareUiState.Idle
+    }
+
+    private fun koreanToLabel(korean: String): String {
+        return when (korean) {
+            "몬스테라" -> "monstera"
+            "산세베리아" -> "snake_plant"
+            "스킨답서스" -> "pothos"
+            "금전수" -> "zz_plant"
+            "인도고무나무" -> "rubber_plant"
+            else -> korean
         }
     }
 
