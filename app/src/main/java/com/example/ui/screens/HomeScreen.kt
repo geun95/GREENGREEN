@@ -1,5 +1,8 @@
 package com.example.ui.screens
 
+import android.Manifest
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.*
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
@@ -49,17 +52,47 @@ fun HomeScreen(
     val weatherState by viewModel.weatherState.collectAsStateWithLifecycle()
     val wateredTodayIds by viewModel.wateredTodayIds.collectAsStateWithLifecycle()
 
+    // 위치 권한 요청 후 날씨 새로고침
+    val locationPermissionLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.RequestMultiplePermissions()
+    ) { permissions ->
+        if (permissions.values.any { it }) {
+            viewModel.fetchWeather()
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        locationPermissionLauncher.launch(
+            arrayOf(
+                Manifest.permission.ACCESS_FINE_LOCATION,
+                Manifest.permission.ACCESS_COARSE_LOCATION
+            )
+        )
+    }
+
     // 오늘 물줄 식물 산출 (nextWateringDate가 오늘 자정 이전이거나 오늘 이전인 플랜트 중 아직 최종 완료안한 식물)
     val todayStart = remember { getStartOfToday() }
     val todayEnd = remember { todayStart + (24 * 60 * 60 * 1000L) }
     
     val todayWateringPlants = remember(plants) {
-        plants.filter { it.nextWateringDate <= todayEnd }
+        plants.filter { plant ->
+            val cycleDays = plant.wateringCycleDays
+            if (cycleDays <= 0) return@filter false
+            val cycleMs = cycleDays * 24 * 60 * 60 * 1000L
+            val next = plant.nextWateringDate
+
+            if (next < todayEnd) return@filter true
+
+            val diff = todayStart - next
+            if (diff < 0) return@filter false
+            val remainder = diff % cycleMs
+            remainder < (24 * 60 * 60 * 1000L)
+        }
     }
 
-    // 완전히 물주기가 완료되지 않은 남은 식물의 갯수 계산
-    val remainingToWaterCount = remember(todayWateringPlants, wateredTodayIds) {
-        todayWateringPlants.count { !wateredTodayIds.contains(it.id) }
+    // 오늘 아직 물을 안 준 식물 수
+    val remainingToWaterCount = remember(plants) {
+        todayWateringPlants.count { it.lastWateredDate !in todayStart until todayEnd }
     }
 
     // 헤더에서 보여줄 인터랙티브 멘트 결정
@@ -90,7 +123,7 @@ fun HomeScreen(
                             modifier = Modifier.size(24.dp)
                         )
                         Text(
-                            text = "그린그린",
+                            text = "GREEN GREEN",
                             fontWeight = FontWeight.Bold,
                             color = GreenPrimary,
                             fontSize = 20.sp
@@ -120,31 +153,28 @@ fun HomeScreen(
             item {
                 HeaderWeatherBox(
                     message = headerMessage,
-                    weatherState = weatherState
+                    weatherState = weatherState,
+                    hasUnwateredPlants = remainingToWaterCount > 0
                 )
             }
 
             // 2. 오늘 물 줄 시간 박스 (가연그린 포인트 2)
             item {
                 Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
+                    Icon(
+                        imageVector = Icons.Filled.WaterDrop,
+                        contentDescription = "물 줄 시간",
+                        tint = BlueWater,
+                        modifier = Modifier.size(20.dp)
+                    )
                     Text(
-                        text = "오늘 물 줄 시간 💧",
+                        text = "오늘 물 줄 시간",
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold,
                         color = OnGreenBackground
-                    )
-                    Text(
-                        text = "전체보기",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = GreenPrimary,
-                        fontWeight = FontWeight.SemiBold,
-                        modifier = Modifier
-                            .clickable { onNavigateToMyPlants() }
-                            .testTag("view_all_plants_button")
                     )
                 }
             }
@@ -152,25 +182,8 @@ fun HomeScreen(
             item {
                 WateringSection(
                     todayPlants = todayWateringPlants,
-                    wateredTodayIds = wateredTodayIds,
-                    onToggleCheck = { viewModel.toggleWateredToday(it) },
-                    onCompleteWatering = { viewModel.waterPlant(it) }
+                    onWaterPlant = { plant -> viewModel.waterPlant(plant) }
                 )
-            }
-
-            // 3. AI 관리 팁 리스트
-            item {
-                Text(
-                    text = "AI 관리 팁 💡",
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Bold,
-                    color = OnGreenBackground,
-                    modifier = Modifier.padding(top = 4.dp)
-                )
-            }
-
-            item {
-                AiTipsSection()
             }
         }
     }
@@ -179,11 +192,14 @@ fun HomeScreen(
 @Composable
 fun HeaderWeatherBox(
     message: String,
-    weatherState: WeatherUiState
+    weatherState: WeatherUiState,
+    hasUnwateredPlants: Boolean = false
 ) {
-    val gradientBrush = Brush.verticalGradient(
-        colors = listOf(GreenPrimary, GreenSecondary)
-    )
+    val gradientBrush = if (hasUnwateredPlants) {
+        Brush.verticalGradient(colors = listOf(Color(0xFFA89060), Color(0xFFC4A870)))
+    } else {
+        Brush.verticalGradient(colors = listOf(GreenPrimary, GreenSecondary))
+    }
 
     Box(
         modifier = Modifier
@@ -291,10 +307,11 @@ fun HeaderWeatherBox(
 @Composable
 fun WateringSection(
     todayPlants: List<Plant>,
-    wateredTodayIds: Set<Int>,
-    onToggleCheck: (Int) -> Unit,
-    onCompleteWatering: (Plant) -> Unit
+    onWaterPlant: (Plant) -> Unit = {}
 ) {
+    val todayStart = remember { getStartOfToday() }
+    val todayEnd = remember { todayStart + (24 * 60 * 60 * 1000L) }
+
     if (todayPlants.isEmpty()) {
         Card(
             modifier = Modifier
@@ -328,7 +345,6 @@ fun WateringSection(
             }
         }
     } else {
-        // 넘치면 박스 안에서 스크롤 (전체 보기는 ㄴㄴ 그냥 높이 규격 설정하고 스크롤 지원)
         Box(
             modifier = Modifier
                 .fillMaxWidth()
@@ -342,15 +358,21 @@ fun WateringSection(
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 items(todayPlants, key = { it.id }) { plant ->
-                    val isChecked = wateredTodayIds.contains(plant.id)
-                    
+                    val isWatered = plant.lastWateredDate in todayStart until todayEnd
+
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
                             .clip(RoundedCornerShape(12.dp))
                             .background(
-                                if (isChecked) MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)
+                                if (isWatered) MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.4f)
                                 else MaterialTheme.colorScheme.background.copy(alpha = 0.5f)
+                            )
+                            .border(
+                                width = 1.dp,
+                                color = if (isWatered) GreenSecondary.copy(alpha = 0.24f)
+                                else MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.65f),
+                                shape = RoundedCornerShape(12.dp)
                             )
                             .padding(12.dp)
                             .testTag("watering_item_${plant.id}"),
@@ -362,17 +384,14 @@ fun WateringSection(
                             horizontalArrangement = Arrangement.spacedBy(12.dp),
                             modifier = Modifier.weight(1f)
                         ) {
-                            // 커스텀 체크 아이콘 버튼 (가연그린 체크기능 포인트 a)
                             IconButton(
-                                onClick = { onToggleCheck(plant.id) },
-                                modifier = Modifier
-                                    .size(24.dp)
-                                    .testTag("checkbox_${plant.id}")
+                                onClick = { if (!isWatered) onWaterPlant(plant) },
+                                modifier = Modifier.size(22.dp)
                             ) {
                                 Icon(
-                                    imageVector = if (isChecked) Icons.Filled.CheckCircle else Icons.Outlined.Circle,
-                                    contentDescription = "Check Water",
-                                    tint = if (isChecked) GreenPrimary else GrayTextSecondary,
+                                    imageVector = if (isWatered) Icons.Filled.CheckCircle else Icons.Outlined.Circle,
+                                    contentDescription = if (isWatered) "물주기 완료" else "물주기",
+                                    tint = if (isWatered) GreenPrimary else GrayTextSecondary,
                                     modifier = Modifier.size(22.dp)
                                 )
                             }
@@ -382,7 +401,7 @@ fun WateringSection(
                                     text = plant.nickname,
                                     style = MaterialTheme.typography.bodyLarge,
                                     fontWeight = FontWeight.Bold,
-                                    color = if (isChecked) GrayTextSecondary else OnGreenBackground,
+                                    color = if (isWatered) GrayTextSecondary else OnGreenBackground,
                                     maxLines = 1,
                                     overflow = TextOverflow.Ellipsis
                                 )
@@ -396,74 +415,13 @@ fun WateringSection(
                             }
                         }
 
-                        // 물주기 완료 클릭 버튼
-                        Button(
-                            onClick = { onCompleteWatering(plant) },
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = if (isChecked) GreenSecondary else GreenPrimary
-                            ),
-                            shape = RoundedCornerShape(8.dp),
-                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
-                            modifier = Modifier
-                                .height(32.dp)
-                                .testTag("water_btn_${plant.id}")
-                        ) {
-                            Text(
-                                text = if (isChecked) "수분공급완료" else "물주기",
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = Color.White
-                            )
-                        }
+                        Text(
+                            text = if (isWatered) "완료" else "물주기 필요",
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = if (isWatered) GreenPrimary else BlueWater
+                        )
                     }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-fun AiTipsSection() {
-    val tips = remember {
-        listOf(
-            "실내가 지나치게 건조할 수 있어요. 몬스테라 같은 잎이 넓은 식물 주변에 가볍게 수분 분무를 촉촉하게 선사해 주세요. ✨",
-            "물이 화분 받침대에 가득 고여 있으면 뿌리가 숨쉴 수 없어 썩을 수 있으니 물을 준 후 꼭 비워내시는 현명함을 강추합니다. ☝️",
-            "가을 및 초겨울의 차가운 발코니 밤바람은 냉해의 원인! 밤에는 실내 거실이나 가습 존으로 모셔오는 것이 완벽해요. 🏡",
-            "햇빛이 부족할 땐 인공 식물 전용 LED 조명을 활용하는 것도 식물들의 면역력과 생명력을 대폭 충전하는 우수한 팁입니다! 💡"
-        )
-    }
-
-    Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .testTag("ai_tips_container"),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)),
-        shape = RoundedCornerShape(16.dp)
-    ) {
-        Column(
-            modifier = Modifier.padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp)
-        ) {
-            tips.forEach { tip ->
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.Top,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Icon(
-                        imageVector = Icons.Filled.Lightbulb,
-                        contentDescription = "Tip Icon",
-                        tint = GoldAccent,
-                        modifier = Modifier
-                            .size(18.dp)
-                            .padding(top = 2.dp)
-                    )
-                    Text(
-                        text = tip,
-                        style = MaterialTheme.typography.bodyMedium.copy(lineHeight = 20.sp),
-                        color = OnGreenBackground,
-                        fontWeight = FontWeight.Medium
-                    )
                 }
             }
         }
@@ -478,4 +436,19 @@ fun getStartOfToday(): Long {
     cal.set(Calendar.SECOND, 0)
     cal.set(Calendar.MILLISECOND, 0)
     return cal.timeInMillis
+}
+
+fun isPlantNeedsWateringToday(plant: Plant): Boolean {
+    val todayStart = getStartOfToday()
+    val todayEnd = todayStart + (24 * 60 * 60 * 1000L)
+    val cycleDays = plant.wateringCycleDays
+    if (cycleDays <= 0) return false
+    val cycleMs = cycleDays * 24 * 60 * 60 * 1000L
+    val next = plant.nextWateringDate
+    val isWateringDay = if (next < todayEnd) true else {
+        val diff = todayStart - next
+        if (diff < 0) false else (diff % cycleMs) < (24 * 60 * 60 * 1000L)
+    }
+    val isWateredToday = plant.lastWateredDate in todayStart until todayEnd
+    return isWateringDay && !isWateredToday
 }

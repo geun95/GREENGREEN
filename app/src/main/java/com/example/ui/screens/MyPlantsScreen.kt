@@ -23,6 +23,7 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.testTag
+import android.net.Uri
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -47,11 +48,22 @@ fun MyPlantsScreen(
         topBar = {
             TopAppBar(
                 title = {
-                    Text(
-                        text = "내 반려식물 🌿",
-                        fontWeight = FontWeight.Bold,
-                        color = OnGreenBackground
-                    )
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.Eco,
+                            contentDescription = "내 반려식물",
+                            tint = GreenPrimary,
+                            modifier = Modifier.size(22.dp)
+                        )
+                        Text(
+                            text = "내 반려식물",
+                            fontWeight = FontWeight.Bold,
+                            color = OnGreenBackground
+                        )
+                    }
                 },
                 colors = TopAppBarDefaults.topAppBarColors(
                     containerColor = MaterialTheme.colorScheme.background
@@ -150,13 +162,21 @@ fun PlantCard(
     plant: Plant,
     onClick: () -> Unit
 ) {
-    // 다음 물 줄 때까지 남은 D-Day 계산
-    val dDayText = remember(plant.nextWateringDate) {
+    // 다음 물 줄 때까지 남은 D-Day 계산 (고정 주기 기반)
+    val dDayText = remember(plant.nextWateringDate, plant.wateringCycleDays) {
         val todayStart = getStartOfToday()
-        val diffMillis = plant.nextWateringDate - todayStart
-        val diffDays = (diffMillis / (24 * 60 * 60 * 1000L)).toInt()
+        val baseDate = plant.nextWateringDate
+        val cycleMs = plant.wateringCycleDays * 24 * 60 * 60 * 1000L
+
+        if (cycleMs <= 0) return@remember "D-Day"
+
+        // baseDate부터 주기를 반복해서 오늘 이후 가장 가까운 날짜 계산
+        var next = baseDate
+        while (next < todayStart) {
+            next += cycleMs
+        }
+        val diffDays = ((next - todayStart) / (24 * 60 * 60 * 1000L)).toInt()
         when {
-            diffDays < 0 -> "Overdue"
             diffDays == 0 -> "D-Day"
             else -> "D-$diffDays"
         }
@@ -178,24 +198,34 @@ fun PlantCard(
                     .fillMaxWidth()
                     .height(140.dp)
                     .background(getPlantBackgroundBrush(plant.name))
-                    .padding(12.dp)
             ) {
-                // 식물 정형 뱃지 일러스트
-                Box(
-                    modifier = Modifier.fillMaxSize(),
-                    contentAlignment = Alignment.Center
-                ) {
-                    // 유입 타입에 따라 이모지 혹은 아이콘 매핑으로 싱그럽게 표출
-                    Text(
-                        text = getPlantEmoji(plant.name),
-                        fontSize = 54.sp
+                val hasPhoto = !plant.imageUri.isNullOrEmpty() && plant.imageUri != "default"
+                if (hasPhoto) {
+                    AsyncImage(
+                        model = Uri.parse(plant.imageUri),
+                        contentDescription = plant.nickname,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.fillMaxSize()
                     )
+                } else {
+                    Box(
+                        modifier = Modifier.fillMaxSize(),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.Eco,
+                            contentDescription = "식물",
+                            tint = GreenPrimary,
+                            modifier = Modifier.size(54.dp)
+                        )
+                    }
                 }
 
-                // D-day 배지 (가연그린 D-2 구현 포인트)
+                // D-day 배지
                 Box(
                     modifier = Modifier
                         .align(Alignment.TopEnd)
+                        .padding(12.dp)
                         .clip(RoundedCornerShape(8.dp))
                         .background(
                             if (dDayText == "D-Day" || dDayText == "Overdue") Color(0xFFE57373)
@@ -214,9 +244,13 @@ fun PlantCard(
             }
 
             // 하부 식물 이름 텍스트 영역
+            val needsWatering = remember(plant.lastWateredDate, plant.nextWateringDate, plant.wateringCycleDays) {
+                isPlantNeedsWateringToday(plant)
+            }
             Column(
                 modifier = Modifier
                     .fillMaxWidth()
+                    .background(if (needsWatering) Color(0xFFE8DCC8) else Color.Transparent)
                     .padding(12.dp),
                 verticalArrangement = Arrangement.spacedBy(4.dp)
             ) {
@@ -234,9 +268,9 @@ fun PlantCard(
                     horizontalArrangement = Arrangement.spacedBy(4.dp)
                 ) {
                     Icon(
-                        imageVector = Icons.Filled.Eco,
+                        imageVector = getPlantTypeIcon(plant.name),
                         contentDescription = null,
-                        tint = GreenPrimary,
+                        tint = getPlantTypeIconColor(plant.name),
                         modifier = Modifier.size(12.dp)
                     )
                     Text(
@@ -304,34 +338,24 @@ fun getPlantBackgroundBrush(speciesName: String): Brush {
     return when {
         speciesName.contains("해바라기") || speciesName.contains("Sunflower") -> {
             Brush.radialGradient(
-                colors = listOf(Color(0xFFFFEE58), Color(0xFFFFB300))
+                colors = listOf(GreenSurfaceVariant, GoldAccent)
             )
         }
         speciesName.contains("몬스테라") || speciesName.contains("Monstera") -> {
             Brush.radialGradient(
-                colors = listOf(Color(0xFF81C784), Color(0xFF2E6B4F))
+                colors = listOf(GreenTertiary, GreenPrimary)
             )
         }
         speciesName.contains("아이비") || speciesName.contains("Ivy") -> {
             Brush.radialGradient(
-                colors = listOf(Color(0xFFB2DFDB), Color(0xFF00796B))
+                colors = listOf(Color(0xFFD8F3DC), GreenSecondary)
             )
         }
         else -> {
             Brush.radialGradient(
-                colors = listOf(Color(0xFFE0F2F1), Color(0xFF4DB6AC))
+                colors = listOf(GreenSurfaceVariant, GreenTertiary)
             )
         }
     }
 }
 
-// 이모지 매핑 헬퍼
-fun getPlantEmoji(speciesName: String): String {
-    return when {
-        speciesName.contains("해바라기") || speciesName.contains("Sunflower") -> "🌻"
-        speciesName.contains("몬스테라") || speciesName.contains("Monstera") -> "🌿"
-        speciesName.contains("아이비") || speciesName.contains("Ivy") -> "🌱"
-        speciesName.contains("다육") || speciesName.contains("선인장") -> "🌵"
-        else -> "🍀"
-    }
-}
